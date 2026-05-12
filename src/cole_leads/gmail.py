@@ -237,6 +237,70 @@ class GmailClient:
         )
         logger.warning("gmail_marked_failed", extra={"message_id": message_id, "error": error})
 
+    def bulk_apply_processed_label(
+        self,
+        query: str,
+        *,
+        dry_run: bool = False,
+        chunk_size: int = 1000,
+        page_size: int = 500,
+    ) -> int:
+        """Apply `cole-leads/processed` to every message matching `query`.
+
+        Paginates the list through all results (no max), then applies the label
+        via `users.messages.batchModify` in chunks of `chunk_size` (Gmail's
+        per-call cap is 1000). Returns the total count.
+
+        In `dry_run` mode: counts matches and returns the count without
+        modifying anything. Use this as a high-water-mark backfill before
+        running the live pipeline so the first cron pass doesn't try to
+        re-process 10k+ historical leads.
+        """
+        # ---- 1. Page through the full result set --------------------------
+        all_ids: list[str] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "userId": self._user,
+                "q": query,
+                "maxResults": page_size,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = self._exec(self._service.users().messages().list(**params))
+            for ref in resp.get("messages", []) or []:
+                all_ids.append(ref["id"])
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+
+        total = len(all_ids)
+        logger.info(
+            "bulk_label_collected",
+            extra={"total": total, "dry_run": dry_run, "query": query},
+        )
+
+        if dry_run or total == 0:
+            return total
+
+        # ---- 2. Apply the label in 1000-message batches -------------------
+        label_id = self._get_or_create_label(PROCESSED_LABEL_NAME, "_processed_label_id")
+        labeled = 0
+        for i in range(0, total, chunk_size):
+            chunk = all_ids[i : i + chunk_size]
+            self._exec(
+                self._service.users()
+                .messages()
+                .batchModify(
+                    userId=self._user,
+                    body={"ids": chunk, "addLabelIds": [label_id]},
+                )
+            )
+            labeled += len(chunk)
+            logger.info("bulk_label_chunk", extra={"labeled": labeled, "total": total})
+
+        return total
+
     # ----- helpers ----------------------------------------------------------
 
     def _get_or_create_label(self, name: str, attr: str) -> str:

@@ -346,3 +346,146 @@ class TestRetries:
             client.fetch_unprocessed_leads()
         assert execute.call_count == MAX_RETRIES
         assert sleeps == [0.5, 1.0, 2.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# bulk_apply_processed_label (one-shot backfill)
+# ---------------------------------------------------------------------------
+
+
+def _make_bulk_service(
+    *,
+    list_pages: list[dict[str, Any]],
+    labels: list[dict[str, str]] | None = None,
+) -> MagicMock:
+    """Build a service whose `messages.list` returns each page in turn, and
+    whose `labels.list` returns the given labels."""
+    service = MagicMock()
+    msgs = service.users.return_value.messages.return_value
+    list_executes = [
+        MagicMock(execute=MagicMock(return_value=page)) for page in list_pages
+    ]
+    msgs.list.side_effect = list_executes
+    # batchModify returns 204 No Content / None.
+    msgs.batchModify.return_value.execute.return_value = None
+    # labels: the processed label exists by default.
+    service.users.return_value.labels.return_value.list.return_value.execute.return_value = {
+        "labels": labels if labels is not None else [{"id": "LBL_P", "name": PROCESSED_LABEL_NAME}]
+    }
+    return service
+
+
+class TestBulkApplyProcessedLabel:
+    _Q = (
+        "(to:leads@colegroup.com OR to:leads@cole.co OR to:leads@colellc.com) "
+        "-label:cole-leads/processed"
+    )
+
+    def test_returns_zero_and_skips_batch_modify_when_no_matches(self):
+        service = _make_bulk_service(list_pages=[{"messages": []}])
+        client = GmailClient(service=service, user_email="me")
+
+        total = client.bulk_apply_processed_label(self._Q)
+
+        assert total == 0
+        service.users.return_value.messages.return_value.batchModify.assert_not_called()
+        # No label lookup either — we short-circuit before touching labels.
+        service.users.return_value.labels.return_value.list.assert_not_called()
+
+    def test_paginates_through_all_pages(self):
+        # Two pages: 3 messages, then 2 messages, then no nextPageToken.
+        service = _make_bulk_service(
+            list_pages=[
+                {
+                    "messages": [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}],
+                    "nextPageToken": "TOK2",
+                },
+                {"messages": [{"id": "m4"}, {"id": "m5"}]},
+            ]
+        )
+        client = GmailClient(service=service, user_email="me")
+
+        total = client.bulk_apply_processed_label(self._Q)
+
+        assert total == 5
+        msgs = service.users.return_value.messages.return_value
+        assert msgs.list.call_count == 2
+        # First call has no pageToken; second carries TOK2.
+        first_call_kwargs = msgs.list.call_args_list[0].kwargs
+        second_call_kwargs = msgs.list.call_args_list[1].kwargs
+        assert "pageToken" not in first_call_kwargs
+        assert second_call_kwargs.get("pageToken") == "TOK2"
+
+    def test_query_and_label_id_used_in_batch_modify(self):
+        service = _make_bulk_service(
+            list_pages=[{"messages": [{"id": "m1"}, {"id": "m2"}]}]
+        )
+        client = GmailClient(service=service, user_email="me")
+
+        client.bulk_apply_processed_label(self._Q)
+
+        msgs = service.users.return_value.messages.return_value
+        # The list call must have used the spec's query verbatim.
+        assert msgs.list.call_args_list[0].kwargs["q"] == self._Q
+        # batchModify must have used the resolved processed-label ID and the
+        # collected message IDs.
+        body = msgs.batchModify.call_args.kwargs["body"]
+        assert body == {"ids": ["m1", "m2"], "addLabelIds": ["LBL_P"]}
+
+    def test_chunks_at_1000(self):
+        # 2500 IDs across 5 pages of 500. Expect 3 batchModify calls of sizes
+        # [1000, 1000, 500].
+        pages: list[dict[str, Any]] = []
+        for chunk_idx in range(5):
+            page = {"messages": [{"id": f"m{chunk_idx * 500 + i}"} for i in range(500)]}
+            if chunk_idx < 4:
+                page["nextPageToken"] = f"TOK{chunk_idx + 1}"
+            pages.append(page)
+        service = _make_bulk_service(list_pages=pages)
+        client = GmailClient(service=service, user_email="me")
+
+        total = client.bulk_apply_processed_label(self._Q)
+
+        assert total == 2500
+        msgs = service.users.return_value.messages.return_value
+        # Three chunks at 1000 each.
+        assert msgs.batchModify.call_count == 3
+        chunk_sizes = [
+            len(call.kwargs["body"]["ids"]) for call in msgs.batchModify.call_args_list
+        ]
+        assert chunk_sizes == [1000, 1000, 500]
+        # First chunk starts at m0, third chunk ends at m2499.
+        assert msgs.batchModify.call_args_list[0].kwargs["body"]["ids"][0] == "m0"
+        assert msgs.batchModify.call_args_list[-1].kwargs["body"]["ids"][-1] == "m2499"
+
+    def test_dry_run_counts_without_modifying(self):
+        service = _make_bulk_service(
+            list_pages=[{"messages": [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]}]
+        )
+        client = GmailClient(service=service, user_email="me")
+
+        total = client.bulk_apply_processed_label(self._Q, dry_run=True)
+
+        assert total == 3
+        # No write of any kind, and no label lookup.
+        service.users.return_value.messages.return_value.batchModify.assert_not_called()
+        service.users.return_value.labels.return_value.list.assert_not_called()
+
+    def test_uses_processed_label_not_failed(self):
+        """Sanity guard against a copy-paste regression where backfill points
+        at the wrong label. With both labels present, the processed one must win."""
+        service = _make_bulk_service(
+            list_pages=[{"messages": [{"id": "m1"}]}],
+            labels=[
+                {"id": "LBL_FAILED_WRONG", "name": FAILED_LABEL_NAME},
+                {"id": "LBL_PROCESSED_RIGHT", "name": PROCESSED_LABEL_NAME},
+            ],
+        )
+        client = GmailClient(service=service, user_email="me")
+
+        client.bulk_apply_processed_label(self._Q)
+
+        body = service.users.return_value.messages.return_value.batchModify.call_args.kwargs[
+            "body"
+        ]
+        assert body["addLabelIds"] == ["LBL_PROCESSED_RIGHT"]
