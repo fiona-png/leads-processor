@@ -583,3 +583,40 @@ class TestRequestRetry:
         assert len(calls) == MAX_RETRIES
         # One sleep between each of the first 4 attempts; no sleep after the last.
         assert sleeps == [0.5, 1.0, 2.0, 4.0]
+
+
+# ============================================================================
+# delete_search / delete_client (integration-test cleanup)
+# ============================================================================
+
+
+class TestDelete:
+    def test_delete_search_issues_delete_to_searches_table(self):
+        seen: dict[str, Any] = {}
+
+        def h(request: httpx.Request) -> httpx.Response:
+            seen["method"] = request.method
+            seen["path"] = request.url.path
+            return httpx.Response(200, json={"deleted": True, "id": "recSEARCH"})
+
+        with make_client(h) as at:
+            at.delete_search("recSEARCH")
+
+        assert seen["method"] == "DELETE"
+        assert AIRTABLE_SEARCHES_TABLE in seen["path"]
+        assert seen["path"].endswith("/recSEARCH")
+
+    def test_delete_client_issues_delete_to_clients_table(self):
+        seen: dict[str, Any] = {}
+
+        def h(request: httpx.Request) -> httpx.Response:
+            seen["method"] = request.method
+            seen["path"] = request.url.path
+            return httpx.Response(200, json={"deleted": True, "id": "recCLIENT"})
+
+        with make_client(h) as at:
+            at.delete_client("recCLIENT")
+
+        assert seen["method"] == "DELETE"
+        assert AIRTABLE_CLIENTS_TABLE in seen["path"]
+        assert seen["path"].endswith("/recCLIENT")

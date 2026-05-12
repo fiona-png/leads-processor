@@ -311,3 +311,20 @@ class AirtableClient:
             json={"fields": fields, "typecast": True},
         )
         return resp.json()["id"]
+
+    # ----- Cleanup (integration tests only) ----------------------------------
+
+    def delete_search(self, record_id: str) -> None:
+        """Hard-delete a Search row. Only the integration test calls this —
+        the production pipeline never deletes."""
+        self._request(
+            "DELETE",
+            f"/{AIRTABLE_BASE_ID}/{AIRTABLE_SEARCHES_TABLE}/{record_id}",
+        )
+
+    def delete_client(self, record_id: str) -> None:
+        """Hard-delete a Client row. Only the integration test calls this."""
+        self._request(
+            "DELETE",
+            f"/{AIRTABLE_BASE_ID}/{AIRTABLE_CLIENTS_TABLE}/{record_id}",
+        )

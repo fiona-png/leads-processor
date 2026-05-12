@@ -113,4 +113,3 @@ class TestSearchRecord:
         assert r.status == "Qualified"
         assert r.outcome == "Open"
         assert r.open_flag is True
-        assert r.investor_record_ids == []

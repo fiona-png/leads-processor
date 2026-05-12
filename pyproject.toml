@@ -31,6 +31,12 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# Integration tests need real API credentials and burn LLM credit — exclude
+# by default. Run them explicitly with `pytest -m integration`.
+markers = [
+    "integration: end-to-end test against real Anthropic + Gmail + Airtable; needs .env",
+]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 100

@@ -117,7 +117,6 @@ class SearchRecord(BaseModel):
     search_name: str
     client_record_id: str
     lead_recipient_record_id: str | None = None
-    investor_record_ids: list[str] = Field(default_factory=list)
     lead_source_company_record_id: str | None = None
     lead_source_individual: str | None = None
     lead_source_type: LeadSourceType
