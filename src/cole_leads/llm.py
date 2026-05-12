@@ -241,13 +241,15 @@ def extract_lead(
     )
 
     for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "emit_lead":
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "emit_lead"
+        ):
             raw = block.input  # type: ignore[attr-defined]
             if isinstance(raw, str):
                 raw = json.loads(raw)
             return Lead.model_validate(raw)
 
     raise ValueError(
-        "Claude did not emit `emit_lead`. "
-        f"Stop reason: {getattr(response, 'stop_reason', '?')}"
+        f"Claude did not emit `emit_lead`. Stop reason: {getattr(response, 'stop_reason', '?')}"
     )

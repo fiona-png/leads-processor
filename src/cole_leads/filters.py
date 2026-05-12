@@ -102,7 +102,7 @@ def parse_forwarded_headers(body: str) -> ForwardedHeaders:
         return ForwardedHeaders(None, None, None, None)
 
     marker = _FORWARDED_MARKER_RE.search(body)
-    haystack = body[marker.end():] if marker else body
+    haystack = body[marker.end() :] if marker else body
 
     from_m = _INNER_FROM_RE.search(haystack)
     date_m = _INNER_DATE_RE.search(haystack)

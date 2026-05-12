@@ -30,20 +30,20 @@ AIRTABLE_CLOSES_VIEW = "viwOq2S67Uew3t8xz"
 # ---------------------------------------------------------------------------
 
 TEAM_MAP: dict[str, str] = {
-    "jamie":   "recQcggsMzAPNOghx",
-    "matt":    "recr5w4mfK2muZEx2",
+    "jamie": "recQcggsMzAPNOghx",
+    "matt": "recr5w4mfK2muZEx2",
     "gillian": "recpob7Zko8nUbmpf",
-    "david":   "recXXxcDyYzCWRwkC",
-    "chloe":   "reckIGJWFj26FAs8Z",
+    "david": "recXXxcDyYzCWRwkC",
+    "chloe": "reckIGJWFj26FAs8Z",
     "natalia": "recq0zqELLTUA76Ch",
-    "clay":    "rect1jZKqn6FtlWpw",
-    "gia":     "recCm4ilW1PFkO7sT",
+    "clay": "rect1jZKqn6FtlWpw",
+    "gia": "recCm4ilW1PFkO7sT",
     "bridget": "recoY8Iqul6qcx87v",
-    "geoff":   "rec9f5jBf3q8kj1vK",
-    "fiona":   "rectplJuZeBMiCBpy",
+    "geoff": "rec9f5jBf3q8kj1vK",
+    "fiona": "rectplJuZeBMiCBpy",
     "brandon": "rech0pp0Mt3nsKdjZ",
-    "rob":     "recWDxkomFcWO6cXd",
-    "kelly":   "recIKvT37OuAqK5Gz",
+    "rob": "recWDxkomFcWO6cXd",
+    "kelly": "recIKvT37OuAqK5Gz",
 }
 
 INTERNAL_DOMAINS: frozenset[str] = frozenset({"colellc.com", "cole.co", "colegroup.com"})
@@ -58,13 +58,13 @@ INTERNAL_DOMAINS: frozenset[str] = frozenset({"colellc.com", "cole.co", "colegro
 # Others -> "{seniority}{first letter of role}".
 
 CHIEF_ABBREV: dict[str, str] = {
-    "Sales":               "CRO",
-    "Marketing":           "CMO",
-    "Customer Success":    "CCO",
-    "Sales Engineering":   "CTO",
-    "General Management":  "COO",
-    "BD":                  "CBO",
-    "Sales Ops":           "COO",
+    "Sales": "CRO",
+    "Marketing": "CMO",
+    "Customer Success": "CCO",
+    "Sales Engineering": "CTO",
+    "General Management": "COO",
+    "BD": "CBO",
+    "Sales Ops": "COO",
 }
 
 
@@ -98,7 +98,7 @@ class Settings:
     gmail_user: str
 
 
-def load_settings() -> Settings:
+def get_settings() -> Settings:
     """Read all required secrets from the environment. Raises if anything is missing."""
     required = {
         "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),

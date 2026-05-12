@@ -10,8 +10,8 @@ Watches `leads@colellc.com` / `leads@cole.co` / `leads@colegroup.com`, uses Clau
 - [x] Models (`ParsedEmail`, `CompanyResearch`, `Lead`, `SearchRecord`)
 - [x] Filters (forward/reply detection, inner-header parsing)
 - [x] Combined Claude parse+research call
+- [x] Airtable client (exact-match lookups, idempotent Search creation)
 - [ ] Gmail fetch
-- [ ] Airtable client (exact-match lookups, idempotent Search creation)
 - [ ] End-to-end pipeline
 - [ ] CI cron on GitHub Actions
 

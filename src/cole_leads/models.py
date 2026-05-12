@@ -60,7 +60,9 @@ class ParsedEmail(BaseModel):
     lead_recipient: str = Field(
         ..., description="First name lowercase of the Cole team member the lead was sent TO."
     )
-    lead_date: date = Field(..., description="Date the original lead email was sent (not forwarded).")
+    lead_date: date = Field(
+        ..., description="Date the original lead email was sent (not forwarded)."
+    )
     lead_source_individual: str | None = Field(
         None,
         description="External person who referred the lead. Never a Cole team member.",
