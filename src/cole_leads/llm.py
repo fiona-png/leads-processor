@@ -16,7 +16,7 @@ from typing import Any
 from anthropic import Anthropic
 
 from .filters import ForwardedHeaders
-from .models import Lead
+from .models import Lead, RawEmail
 
 # Anthropic model: latest Sonnet is a fine default for parse+research.
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -253,3 +253,42 @@ def extract_lead(
     raise ValueError(
         f"Claude did not emit `emit_lead`. Stop reason: {getattr(response, 'stop_reason', '?')}"
     )
+
+
+class LLMClient:
+    """Thin DI wrapper around `extract_lead` for the pipeline.
+
+    Production: construct with no args; reads `ANTHROPIC_API_KEY` from env.
+    Tests: pass `anthropic=<stub>` to bypass the real SDK.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        anthropic: Anthropic | None = None,
+        model: str = DEFAULT_MODEL,
+    ) -> None:
+        if anthropic is None:
+            if api_key is None:
+                from .config import (
+                    get_settings,  # local import keeps config side effects out of imports
+                )
+
+                api_key = get_settings().anthropic_api_key
+            anthropic = Anthropic(api_key=api_key)
+        self._client = anthropic
+        self._model = model
+
+    def parse_and_research(self, raw_email: RawEmail, inner_headers: ForwardedHeaders) -> Lead:
+        """Run one Claude call to parse the forward and research the client company."""
+        return extract_lead(
+            body_text=raw_email.body_text,
+            outer_subject=raw_email.subject,
+            outer_from=raw_email.from_addr,
+            outer_to=raw_email.to_addr,
+            outer_received_at=raw_email.received_at.isoformat(),
+            inner=inner_headers,
+            client=self._client,
+            model=self._model,
+        )

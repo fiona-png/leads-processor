@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .config import INTERNAL_DOMAINS
+
+if TYPE_CHECKING:
+    from .models import RawEmail
 
 _FWD_SUBJECT_RE = re.compile(r"^\s*(?:fwd?|fw):\s*", re.IGNORECASE)
 _RE_SUBJECT_RE = re.compile(r"^\s*re:\s*", re.IGNORECASE)
@@ -115,3 +119,18 @@ def parse_forwarded_headers(body: str) -> ForwardedHeaders:
         subject=subject_m.group(1).strip() if subject_m else None,
         to=to_m.group(1).strip() if to_m else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# RawEmail convenience wrappers used by the pipeline
+# ---------------------------------------------------------------------------
+
+
+def should_process_email(email: RawEmail) -> bool:
+    """Wrap `should_process` for callers that already have a `RawEmail`."""
+    return should_process(email.subject, email.body_text, from_addr=email.from_addr)
+
+
+def extract_inner_headers(email: RawEmail) -> ForwardedHeaders:
+    """Wrap `parse_forwarded_headers` for callers that already have a `RawEmail`."""
+    return parse_forwarded_headers(email.body_text)

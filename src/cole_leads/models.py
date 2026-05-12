@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 Role = Literal[
     "Sales",
@@ -46,6 +46,13 @@ Series = Literal[
     "Public",
     "Bootstrapped",
     "Unknown",
+]
+
+ProcessStatus = Literal[
+    "created",
+    "skipped_duplicate",
+    "skipped_filter",
+    "failed",
 ]
 
 
@@ -100,16 +107,16 @@ class Lead(BaseModel):
 class SearchRecord(BaseModel):
     """Shape of a Search row in Airtable. Field names mirror the column names.
 
-    The `gmail_message_id` is stored on the Search row and is the idempotency key:
-    before creating a new Search we check whether one already exists with the same
-    message ID.
+    `gmail_message_id` is stored on the Search row and is the idempotency key:
+    before creating a new Search we check whether one already exists with the
+    same message ID.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     search_name: str
     client_record_id: str
-    lead_recipient_record_id: str
+    lead_recipient_record_id: str | None = None
     investor_record_ids: list[str] = Field(default_factory=list)
     lead_source_company_record_id: str | None = None
     lead_source_individual: str | None = None
@@ -129,6 +136,45 @@ class SearchRecord(BaseModel):
     outcome: Literal["Open"] = "Open"
     open_flag: bool = True
 
+    @classmethod
+    def from_lead(
+        cls,
+        lead: Lead,
+        *,
+        client_id: str,
+        recipient_id: str | None,
+        lead_source_id: str | None,
+        gmail_message_id: str,
+        lead_source_type_override: LeadSourceType | None = None,
+    ) -> SearchRecord:
+        """Build a SearchRecord by combining a Lead with resolved Airtable IDs.
+
+        `lead_source_type_override` lets the pipeline force "Existing Client" when
+        the client has prior closed searches; otherwise we use the LLM's classification.
+        """
+        from .config import search_name as build_search_name  # local import: cycle-free
+
+        p, r = lead.parsed, lead.research
+        return cls(
+            search_name=build_search_name(p.client, p.seniority, p.role),
+            client_record_id=client_id,
+            lead_recipient_record_id=recipient_id,
+            lead_source_company_record_id=lead_source_id,
+            lead_source_individual=p.lead_source_individual,
+            lead_source_type=lead_source_type_override or p.lead_source_type,
+            lead_date=p.lead_date,
+            lead_notes=p.lead_notes,
+            role=p.role,
+            seniority=p.seniority,
+            biz_type=r.biz_type,
+            biz_arr=r.biz_arr,
+            company_hq=r.company_hq,
+            series=r.series,
+            search_type=r.search_type,
+            website=r.website,
+            gmail_message_id=gmail_message_id,
+        )
+
 
 class RawEmail(BaseModel):
     """Minimal Gmail-message shape used downstream. `gmail.py` builds these."""
@@ -140,5 +186,53 @@ class RawEmail(BaseModel):
     subject: str
     from_addr: str
     to_addr: str
+    cc_addr: str | None = None
     received_at: date
     body_text: str
+
+
+class ProcessResult(BaseModel):
+    """Outcome of running the pipeline on a single email."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str
+    status: ProcessStatus
+    search_record_id: str | None = None
+    client_record_id: str | None = None
+    error: str | None = None
+    lead: Lead | None = None
+    dry_run: bool = False
+
+
+class RunSummary(BaseModel):
+    """Aggregate of `ProcessResult`s from a single `run()` pass."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[ProcessResult] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total(self) -> int:
+        return len(self.results)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def created(self) -> int:
+        return sum(1 for r in self.results if r.status == "created")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def skipped_duplicate(self) -> int:
+        return sum(1 for r in self.results if r.status == "skipped_duplicate")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def skipped_filter(self) -> int:
+        return sum(1 for r in self.results if r.status == "skipped_filter")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def failed(self) -> int:
+        return sum(1 for r in self.results if r.status == "failed")
