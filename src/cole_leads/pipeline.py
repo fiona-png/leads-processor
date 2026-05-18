@@ -126,6 +126,20 @@ def process_one_lead(
         },
     )
 
+    # The LLM signals "this wasn't actually a lead" by emitting client=null.
+    # Skip the row and mark the message processed so we don't keep re-running
+    # the LLM on it.
+    if lead.parsed.client is None:
+        logger.info("pipeline_skip_no_lead", extra={"message_id": msg_id})
+        if not dry_run:
+            gmail.mark_processed(msg_id)
+        return ProcessResult(
+            message_id=msg_id,
+            status="skipped_no_lead",
+            lead=lead,
+            dry_run=dry_run,
+        )
+
     # --- 5. Airtable writes ------------------------------------------------
     try:
         # 5a. Client (upsert)
@@ -297,6 +311,7 @@ def run(
             "n_created": summary.created,
             "n_skipped_duplicate": summary.skipped_duplicate,
             "n_skipped_filter": summary.skipped_filter,
+            "n_skipped_no_lead": summary.skipped_no_lead,
             "n_failed": summary.failed,
         },
     )
@@ -408,7 +423,12 @@ def _run_fixture(path: Path, *, dry_run: bool) -> int:
 
     result = process_one_lead(email, gmail=gmail, airtable=airtable, llm=llm, dry_run=dry_run)
     print(json.dumps(result.model_dump(mode="json"), indent=2, default=str))
-    return 0 if result.status in ("created", "skipped_duplicate", "skipped_filter") else 1
+    return (
+        0
+        if result.status
+        in ("created", "skipped_duplicate", "skipped_filter", "skipped_no_lead")
+        else 1
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

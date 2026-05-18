@@ -40,7 +40,14 @@ _LEAD_TOOL_SCHEMA: dict[str, Any] = {
                 "lead_notes",
             ],
             "properties": {
-                "client": {"type": "string", "description": "External hiring company."},
+                "client": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "External hiring company. Set to null when the email "
+                        "is not actually an executive-search lead — the "
+                        "pipeline will then skip it without writing anything."
+                    ),
+                },
                 "role": {
                     "type": "string",
                     "enum": [
@@ -153,6 +160,7 @@ You receive ONE forwarded email containing a lead (an external person referring 
 CRITICAL RULES:
 
 - `client` is the external hiring company, NEVER "Cole Group", "The Cole Group", or anything @colellc.com / @cole.co / @colegroup.com.
+- If the email isn't actually an executive-search lead (e.g. internal chatter, a calendar reminder, an unrelated note that happened to mention a role), set `client` to null. The pipeline will skip the row. Other parsed fields can be filled with best-effort placeholders in that case — they won't be used.
 - `lead_recipient` is the first name (lowercase) of the Cole team member the *original* lead email was sent TO. Look at the inner forwarded `To:` header, not the outer envelope.
 - `lead_source_individual` is the person who referred the lead. NEVER a Cole team member. If the forwarded email is from an internal Cole address, the source is somewhere earlier in the chain.
 - `lead_source_type` rules:

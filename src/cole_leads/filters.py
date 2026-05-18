@@ -26,6 +26,47 @@ _FORWARDED_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Substring needles (case-insensitive) used by the broad forward + keyword checks.
+# These mirror the n8n `Filter & Extract Lead` heuristics: real leads come in as
+# explicit forwards, but also as direct emails with a role title in the subject,
+# or as short internal "lead" / "intro" notes from teammates.
+_FORWARD_SUBJECT_NEEDLES: tuple[str, ...] = ("fwd:", "fw:")
+_FORWARD_BODY_NEEDLES: tuple[str, ...] = (
+    "forwarded message",
+    "---------- forwarded",
+    "begin forwarded",
+    "fwd:",
+)
+
+# Subject keywords that on their own make a direct email worth processing.
+# Substring match (case-insensitive). "vp " keeps a trailing space so we don't
+# light up on words like "vpn".
+ROLE_KEYWORDS: tuple[str, ...] = (
+    # role titles
+    "cmo",
+    "ceo",
+    "cto",
+    "cfo",
+    "coo",
+    "cio",
+    "vp ",
+    "vice president",
+    "director",
+    "head of",
+    "chief",
+    "president",
+    "svp",
+    "evp",
+    # intent signals
+    "lead",
+    "intro",
+    "pre-lead",
+)
+
+# Short-internal-note heuristic: if a Cole teammate sends a tiny note with no
+# forward indicator and no role keyword, drop it.
+_INTERNAL_SHORT_NOTE_MAX_CHARS = 200
+
 # Used to pull the inner headers out of the forwarded body.
 _INNER_FROM_RE = re.compile(r"^\s*From:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _INNER_DATE_RE = re.compile(r"^\s*Date:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -50,12 +91,17 @@ def is_internal(email: str) -> bool:
 
 
 def is_forward(subject: str, body: str) -> bool:
-    """A forward by subject prefix or by forwarded-marker in body."""
-    if _FWD_SUBJECT_RE.match(subject or ""):
+    """Forwarded message detected by subject token (`fwd:` / `fw:`) or body marker.
+
+    Substring match on lowercased text — broader than a strict subject prefix
+    because n8n's filter accepts mid-subject `Fwd:` and a wider set of body
+    markers.
+    """
+    s = (subject or "").lower()
+    if any(n in s for n in _FORWARD_SUBJECT_NEEDLES):
         return True
-    if _FORWARDED_MARKER_RE.search(body or ""):
-        return True
-    return False
+    b = (body or "").lower()
+    return any(n in b for n in _FORWARD_BODY_NEEDLES)
 
 
 def is_reply_not_forward(subject: str) -> bool:
@@ -66,22 +112,42 @@ def is_reply_not_forward(subject: str) -> bool:
     return not _FWD_THEN_RE_SUBJECT_RE.match(s)
 
 
+def has_role_keyword(subject: str) -> bool:
+    """True if the subject contains any role-title or lead-intent keyword."""
+    s = (subject or "").lower()
+    return any(k in s for k in ROLE_KEYWORDS)
+
+
 def should_process(subject: str, body: str, *, from_addr: str = "") -> bool:
     """Top-level filter: keep the email or drop it.
 
-    Rules (from the n8n workflow):
-      - Drop `Re: ...` unless it's `Fwd: Re: ...`.
-      - Keep if subject is `Fwd:` / `Fw:` or body contains a forwarded marker.
-      - Drop short internal-only replies (heuristic: from an internal domain AND
-        not a forward).
+    Mirrors the n8n `Filter & Extract Lead` rules so real leads aren't silently
+    dropped:
+
+      1. Drop `Re: ...` unless it's `Fwd: Re: ...` (replies are noise).
+      2. Keep anything that looks like a forward (subject token or body marker).
+      3. Keep anything with a role/intent keyword in the subject — direct
+         emails like "Acme CMO opportunity" or "airops lead" come in cold.
+      4. Drop a short internal note that has neither signal (a teammate
+         scribbling something to the list with no role and no forward).
+      5. Otherwise accept and let the LLM decide.
     """
     if is_reply_not_forward(subject):
         return False
-    if not is_forward(subject, body):
-        # Internal short replies don't have a forward marker — drop them.
+
+    forward = is_forward(subject, body)
+    keyword = has_role_keyword(subject)
+
+    if forward or keyword:
+        return True
+
+    if (
+        from_addr
+        and is_internal(from_addr)
+        and len(body or "") < _INTERNAL_SHORT_NOTE_MAX_CHARS
+    ):
         return False
-    if from_addr and is_internal(from_addr) and not is_forward(subject, body):
-        return False
+
     return True
 
 

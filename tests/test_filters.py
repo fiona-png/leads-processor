@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cole_leads.filters import (
     domain_of,
+    has_role_keyword,
     is_forward,
     is_internal,
     is_reply_not_forward,
@@ -62,7 +65,41 @@ class TestReplyDetection:
         assert is_reply_not_forward("intro") is False
 
 
+class TestHasRoleKeyword:
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "Acme CMO opportunity",
+            "vp sales search at Stripe portfolio co",  # the trailing-space "vp " token
+            "VP Marketing role",
+            "Head of Engineering at Globex",
+            "Chief Revenue Officer wanted",
+            "Director of Sales",
+            "airops lead",
+            "Pre-lead via former colleague/GC (Generus)",
+            "Intro: Northwind",
+            "President of NA",
+            "SVP marketing search",
+            "evp sales",
+        ],
+    )
+    def test_match(self, subject):
+        assert has_role_keyword(subject) is True
+
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "lunch tomorrow",
+            "vpn outage",  # must not light up on "vpn" — "vp " requires trailing space
+            "",
+        ],
+    )
+    def test_no_match(self, subject):
+        assert has_role_keyword(subject) is False
+
+
 class TestShouldProcess:
+    # --- existing fixture-driven cases ------------------------------------
     def test_real_forward_kept(self, gmail_vc_referral):
         subject, from_addr, _to, body = gmail_vc_referral
         assert should_process(subject, body, from_addr=from_addr) is True
@@ -78,6 +115,96 @@ class TestShouldProcess:
     def test_fwd_re_kept(self, fwd_re_keep):
         subject, from_addr, _to, body = fwd_re_keep
         assert should_process(subject, body, from_addr=from_addr) is True
+
+    # --- direct-email role-keyword acceptance (matches n8n behavior) ------
+    def test_direct_email_with_role_keyword_kept(self):
+        """A cold direct email naming a role is a real lead."""
+        assert (
+            should_process(
+                "Acme CMO opportunity",
+                "Hi — we'd love to chat about a CMO search.",
+                from_addr="jane@accel.com",
+            )
+            is True
+        )
+
+    def test_vp_keyword_at_portfolio_co_kept(self):
+        assert (
+            should_process(
+                "VP Sales search at Stripe portfolio co",
+                "Reaching out about a VP Sales opening.",
+                from_addr="partner@accel.com",
+            )
+            is True
+        )
+
+    def test_airops_lead_subject_kept(self):
+        """Short internal note with the `lead` keyword in subject is kept."""
+        assert (
+            should_process(
+                "airops lead",
+                "fyi",
+                from_addr="matt@colellc.com",
+            )
+            is True
+        )
+
+    def test_pre_lead_subject_kept(self):
+        assert (
+            should_process(
+                "Pre-lead via former colleague/GC (Generus)",
+                "Heads up — Generus might be a real one.",
+                from_addr="gillian@colellc.com",
+            )
+            is True
+        )
+
+    # --- drops -----------------------------------------------------------
+    def test_plain_re_reply_dropped(self):
+        """A pure `Re:` with no forward indicator is dropped regardless of body."""
+        assert (
+            should_process(
+                "Re: lunch tomorrow",
+                "Sounds good!",
+                from_addr="chloe@colellc.com",
+            )
+            is False
+        )
+
+    def test_short_internal_note_with_no_signals_dropped(self):
+        """Internal teammate, short body, no forward marker, no role keyword → drop."""
+        assert (
+            should_process(
+                "fyi",
+                "checking in",
+                from_addr="fiona@colegroup.com",
+            )
+            is False
+        )
+
+    def test_long_internal_note_with_no_signals_kept(self):
+        """Same internal sender but >=200 chars of body → fall through to accept."""
+        long_body = "x" * 250
+        assert (
+            should_process(
+                "thoughts",
+                long_body,
+                from_addr="fiona@colegroup.com",
+            )
+            is True
+        )
+
+    def test_external_short_note_kept(self):
+        """External sender with no forward / no keyword still passes — the
+        short-note drop is internal-only."""
+        assert (
+            should_process(
+                "hi",
+                "small note",
+                from_addr="someone@external.com",
+            )
+            is True
+        )
 
 
 class TestParseForwardedHeaders:

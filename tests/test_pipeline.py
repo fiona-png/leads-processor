@@ -210,6 +210,64 @@ class TestFilter:
 
 
 # ---------------------------------------------------------------------------
+# LLM says "this isn't a lead"
+# ---------------------------------------------------------------------------
+
+
+class TestLLMReturnsNoLead:
+    def test_client_none_skips_without_airtable_writes(self):
+        gmail = _gmail_mock()
+        airtable = _airtable_mock()
+        # LLM returns a Lead with client=None — i.e., "this email wasn't actually a lead".
+        llm = _llm_mock(_lead(parsed={"client": None}))
+
+        result = process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+
+        assert result.status == "skipped_no_lead"
+        assert result.search_record_id is None
+        assert result.client_record_id is None
+        # No Airtable writes at all — we should bail before touching them.
+        airtable.upsert_client.assert_not_called()
+        airtable.find_or_create_investor.assert_not_called()
+        airtable.create_search.assert_not_called()
+        # But we still mark the message processed so it doesn't keep coming back.
+        gmail.mark_processed.assert_called_once_with("msg-abc")
+        gmail.mark_failed.assert_not_called()
+
+    def test_client_none_in_dry_run_does_not_label_gmail(self):
+        gmail = _gmail_mock()
+        airtable = _airtable_mock()
+        llm = _llm_mock(_lead(parsed={"client": None}))
+
+        result = process_one_lead(
+            _raw_email(), gmail=gmail, airtable=airtable, llm=llm, dry_run=True
+        )
+
+        assert result.status == "skipped_no_lead"
+        assert result.dry_run is True
+        gmail.mark_processed.assert_not_called()
+        airtable.upsert_client.assert_not_called()
+
+    def test_run_summary_counts_skipped_no_lead(self):
+        emails = [_raw_email(message_id="nope-1"), _raw_email(message_id="ok-1")]
+        gmail = _gmail_mock()
+        gmail.fetch_unprocessed_leads.return_value = emails
+        airtable = _airtable_mock()
+        llm = MagicMock()
+        llm.parse_and_research.side_effect = [
+            _lead(parsed={"client": None}),  # first one isn't really a lead
+            _lead(),  # second is fine
+        ]
+
+        summary = run(gmail=gmail, airtable=airtable, llm=llm, max_leads=10)
+
+        assert summary.total == 2
+        assert summary.skipped_no_lead == 1
+        assert summary.created == 1
+        assert summary.failed == 0
+
+
+# ---------------------------------------------------------------------------
 # LLM failure
 # ---------------------------------------------------------------------------
 

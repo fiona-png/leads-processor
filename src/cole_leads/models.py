@@ -52,6 +52,7 @@ ProcessStatus = Literal[
     "created",
     "skipped_duplicate",
     "skipped_filter",
+    "skipped_no_lead",
     "failed",
 ]
 
@@ -61,7 +62,14 @@ class ParsedEmail(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    client: str = Field(..., description="External hiring company. Never a Cole Group entity.")
+    client: str | None = Field(
+        default=None,
+        description=(
+            "External hiring company. Never a Cole Group entity. "
+            "null when the email is not actually a lead — the pipeline then "
+            "skips it without creating a Search record."
+        ),
+    )
     role: Role
     seniority: Seniority
     lead_recipient: str = Field(
@@ -230,6 +238,11 @@ class RunSummary(BaseModel):
     @property
     def skipped_filter(self) -> int:
         return sum(1 for r in self.results if r.status == "skipped_filter")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def skipped_no_lead(self) -> int:
+        return sum(1 for r in self.results if r.status == "skipped_no_lead")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
