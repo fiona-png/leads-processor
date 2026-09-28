@@ -17,6 +17,7 @@ Design rules:
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Any
 
 import httpx
@@ -29,6 +30,7 @@ from .config import (
     AIRTABLE_SEARCHES_TABLE,
     get_settings,
 )
+from .lead_source import ClientRow, InvestorRow, RelationshipIndex, SearchRow
 from .models import CompanyResearch, SearchRecord
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,12 @@ SEARCH_LEAD_SOURCE_TYPE = "Lead Source Type"
 SEARCH_LEAD_NOTES = "Lead Notes"
 SEARCH_OPEN = "Open?"
 SEARCH_GMAIL_MESSAGE_ID = "Gmail Message ID"
+SEARCH_LEAD_SOURCE_VC = "Lead Source (VC Only)"  # link -> Investors
+SEARCH_REVIEW_FLAG = "Leads For Fiona's Review"
+SEARCH_REVIEW_NOTES = "Leads Review Notes"
+SEARCH_OUTCOME_DATE = "Outcome Date"
+SEARCH_KICKOFF = "Kickoff"
+SEARCH_CLOSE_DATE = "Close Date"
 
 # Clients table
 CLIENT_NAME = "Client Name"
@@ -74,6 +82,23 @@ INVESTOR_NAME = "Name"
 BASE_URL = "https://api.airtable.com/v0"
 MAX_RETRIES = 5
 RETRY_BASE_SECONDS = 0.5  # exponential: 0.5, 1, 2, 4, 8
+
+
+def _parse_date(v: Any) -> date | None:
+    if not v or not isinstance(v, str):
+        return None
+    try:
+        return date.fromisoformat(v[:10])
+    except ValueError:
+        return None
+
+
+def _as_tuple(v: Any) -> tuple[str, ...]:
+    if not v:
+        return ()
+    if isinstance(v, str):
+        return (v,)
+    return tuple(x for x in v if isinstance(x, str))
 
 
 class AirtableError(RuntimeError):
@@ -268,6 +293,75 @@ class AirtableClient:
         )
         return bool(resp.json().get("records"))
 
+    # ----- Relationship index (for Lead Source resolution) -------------------
+
+    def _list_all(self, table: str, fields: list[str]) -> list[dict[str, Any]]:
+        """Page through every record in `table`, returning only `fields`."""
+        out: list[dict[str, Any]] = []
+        offset: str | None = None
+        while True:
+            params: list[tuple[str, str | int]] = [("pageSize", 100)]
+            params += [("fields[]", f) for f in fields]
+            if offset:
+                params.append(("offset", offset))
+            body = self._request("GET", f"/{AIRTABLE_BASE_ID}/{table}", params=params).json()
+            out.extend(body.get("records", []))
+            offset = body.get("offset")
+            if not offset:
+                return out
+
+    def load_relationship_index(self) -> RelationshipIndex:
+        """Load Clients, Investors and Searches history into memory.
+
+        ~one request per 100 rows; called once per run, and only when there
+        is at least one lead to process.
+        """
+        clients = [
+            ClientRow(
+                id=r["id"],
+                name=r.get("fields", {}).get(CLIENT_NAME, "") or "",
+                website=r.get("fields", {}).get(CLIENT_WEBSITE),
+            )
+            for r in self._list_all(AIRTABLE_CLIENTS_TABLE, [CLIENT_NAME, CLIENT_WEBSITE])
+        ]
+        investors = [
+            InvestorRow(id=r["id"], name=r.get("fields", {}).get(INVESTOR_NAME, "") or "")
+            for r in self._list_all(AIRTABLE_INVESTORS_TABLE, [INVESTOR_NAME])
+        ]
+        search_fields = [
+            SEARCH_CLIENT,
+            SEARCH_STATUS,
+            SEARCH_OUTCOME,
+            SEARCH_LEAD_DATE,
+            SEARCH_OUTCOME_DATE,
+            SEARCH_KICKOFF,
+            SEARCH_CLOSE_DATE,
+            SEARCH_LEAD_SOURCE_INDIVIDUAL,
+            SEARCH_LEAD_SOURCE,
+            SEARCH_LEAD_SOURCE_VC,
+            SEARCH_LEAD_SOURCE_TYPE,
+        ]
+        searches = []
+        for r in self._list_all(AIRTABLE_SEARCHES_TABLE, search_fields):
+            f = r.get("fields", {})
+            searches.append(
+                SearchRow(
+                    id=r["id"],
+                    client_ids=_as_tuple(f.get(SEARCH_CLIENT)),
+                    status=f.get(SEARCH_STATUS),
+                    outcome=f.get(SEARCH_OUTCOME),
+                    lead_date=_parse_date(f.get(SEARCH_LEAD_DATE)),
+                    outcome_date=_parse_date(f.get(SEARCH_OUTCOME_DATE)),
+                    kickoff_date=_parse_date(f.get(SEARCH_KICKOFF)),
+                    close_date=_parse_date(f.get(SEARCH_CLOSE_DATE)),
+                    lead_source_individuals=_as_tuple(f.get(SEARCH_LEAD_SOURCE_INDIVIDUAL)),
+                    lead_source_client_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE)),
+                    lead_source_vc_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE_VC)),
+                    lead_source_type=(f.get(SEARCH_LEAD_SOURCE_TYPE) or "").strip() or None,
+                )
+            )
+        return RelationshipIndex(clients=clients, investors=investors, searches=searches)
+
     # ----- Searches: create --------------------------------------------------
 
     def create_search(self, record: SearchRecord) -> str:
@@ -286,8 +380,14 @@ class AirtableClient:
         }
         if record.lead_source_company_record_id is not None:
             fields[SEARCH_LEAD_SOURCE] = [record.lead_source_company_record_id]
+        if record.lead_source_vc_investor_id is not None:
+            fields[SEARCH_LEAD_SOURCE_VC] = [record.lead_source_vc_investor_id]
         if record.lead_source_individual is not None:
-            fields[SEARCH_LEAD_SOURCE_INDIVIDUAL] = record.lead_source_individual
+            # Multi-select in Airtable; typecast adds a new option if needed.
+            fields[SEARCH_LEAD_SOURCE_INDIVIDUAL] = [record.lead_source_individual]
+        if record.needs_review:
+            fields[SEARCH_REVIEW_FLAG] = True
+            fields[SEARCH_REVIEW_NOTES] = record.review_notes
         if record.lead_recipient_record_id is not None:
             fields[SEARCH_LEAD_RECIPIENT] = [record.lead_recipient_record_id]
         if record.seniority is not None:

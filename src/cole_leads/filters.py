@@ -141,11 +141,7 @@ def should_process(subject: str, body: str, *, from_addr: str = "") -> bool:
     if forward or keyword:
         return True
 
-    if (
-        from_addr
-        and is_internal(from_addr)
-        and len(body or "") < _INTERNAL_SHORT_NOTE_MAX_CHARS
-    ):
+    if from_addr and is_internal(from_addr) and len(body or "") < _INTERNAL_SHORT_NOTE_MAX_CHARS:
         return False
 
     return True

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from . import filters
 from .config import TEAM_MAP
+from .lead_source import RelationshipIndex, norm_person, resolve_lead_source
 from .logging import get_logger
 from .models import (
     ProcessResult,
@@ -56,6 +57,7 @@ def process_one_lead(
     airtable: AirtableClient,
     llm: LLMClient,
     dry_run: bool = False,
+    index: RelationshipIndex | None = None,
 ) -> ProcessResult:
     """Run the full pipeline on one email. Never raises — all failures are
     captured into the returned `ProcessResult`.
@@ -103,7 +105,12 @@ def process_one_lead(
 
     # --- 4. LLM ------------------------------------------------------------
     try:
-        lead = llm.parse_and_research(raw_email, inner)
+        if index is None:
+            index = airtable.load_relationship_index()
+        hints = index.hint_lines(
+            " ".join(filter(None, [inner.from_, inner.to, raw_email.body_text]))
+        )
+        lead = llm.parse_and_research(raw_email, inner, relationship_hints=hints or None)
     except Exception as exc:  # noqa: BLE001 — we want to catch and continue
         logger.exception("pipeline_llm_failed", extra={"message_id": msg_id})
         if not dry_run:
@@ -142,26 +149,37 @@ def process_one_lead(
 
     # --- 5. Airtable writes ------------------------------------------------
     try:
-        # 5a. Client (upsert)
-        if dry_run:
-            existing_client = airtable.find_client_by_name(lead.parsed.client)
-            if existing_client:
-                client_id = existing_client
-                logger.info(
-                    "pipeline_dry_client_exists",
-                    extra={"client": lead.parsed.client, "id": client_id},
+        # 5a. Client: match an existing record by website domain or exact name
+        # first, so "TRM labs" / trmlabs.com doesn't spawn a duplicate client.
+        review_notes: list[str] = []
+        existing_client = index.client_for(
+            lead.parsed.client, lead.research.website, fuzzy=False
+        ) or airtable.find_client_by_name(lead.parsed.client)
+        if existing_client is None:
+            near = index.client_for(lead.parsed.client, fuzzy=True)
+            if near:
+                review_notes.append(
+                    f"Created new client '{lead.parsed.client}' - possible duplicate of "
+                    f"existing client '{index.client_name(near)}'."
                 )
-            else:
-                client_id = "rec_DRY_NEW_CLIENT"
-                logger.info(
-                    "pipeline_dry_would_create_client",
-                    extra={
-                        "client": lead.parsed.client,
-                        "research": lead.research.model_dump(),
-                    },
-                )
+        if existing_client:
+            client_id = existing_client
+            logger.info(
+                "pipeline_client_exists",
+                extra={"client": lead.parsed.client, "id": client_id},
+            )
+        elif dry_run:
+            client_id = "rec_DRY_NEW_CLIENT"
+            logger.info(
+                "pipeline_dry_would_create_client",
+                extra={
+                    "client": lead.parsed.client,
+                    "research": lead.research.model_dump(),
+                },
+            )
         else:
             client_id = airtable.upsert_client(lead.parsed.client, lead.research)
+        hiring_client_known = existing_client is not None
 
         # 5b. Investors
         investor_ids: list[str] = []
@@ -186,24 +204,39 @@ def process_one_lead(
             else:
                 airtable.link_investors_to_client(client_id, investor_ids)
 
-        # 5d. Lead source company resolution
-        lead_source_id: str | None = None
-        if lead.parsed.lead_source_company:
-            lead_source_id = airtable.find_client_by_name(lead.parsed.lead_source_company)
-        # If the LLM classified this as "Company" (hiring company is its own
-        # source) but we couldn't resolve a separate source company, point the
-        # link at the hiring client itself.
-        if lead_source_id is None and lead.parsed.lead_source_type == "Company":
+        # 5d/5e. Lead source: who referred it, where they work, and whether
+        # Cole's history says VC / Existing Client / Company.
+        resolution = resolve_lead_source(
+            index,
+            llm_type=lead.parsed.lead_source_type,
+            llm_individual=lead.parsed.lead_source_individual,
+            llm_company=lead.parsed.lead_source_company,
+            referrer_email=_referrer_email(
+                lead.parsed.lead_source_email, inner.from_, lead.parsed.lead_source_individual
+            ),
+            hiring_client_id=client_id if hiring_client_known else None,
+            hiring_client_name=lead.parsed.client,
+            hiring_website=lead.research.website,
+            lead_date=lead.parsed.lead_date,
+        )
+        lead_source_id = resolution.lead_source_client_id
+        if lead_source_id is None and resolution.lead_source_type in (
+            "Company",
+            "Existing Client",
+        ):
             lead_source_id = client_id
-
-        # 5e. Prior-engagement override of lead_source_type
-        final_source_type = lead.parsed.lead_source_type
-        if airtable.has_closed_searches_for_client(lead.parsed.client):
-            final_source_type = "Existing Client"
-            logger.info(
-                "pipeline_existing_client_override",
-                extra={"client": lead.parsed.client},
-            )
+        final_source_type = resolution.lead_source_type
+        review_notes += resolution.review_notes
+        logger.info(
+            "pipeline_lead_source_resolved",
+            extra={
+                "message_id": msg_id,
+                "llm_type": lead.parsed.lead_source_type,
+                "final_type": final_source_type,
+                "reasons": resolution.reasons,
+                "review_notes": review_notes,
+            },
+        )
 
         # 5f. Build SearchRecord
         recipient_id = TEAM_MAP.get(lead.parsed.lead_recipient.lower())
@@ -222,6 +255,9 @@ def process_one_lead(
             lead_source_id=lead_source_id,
             gmail_message_id=msg_id,
             lead_source_type_override=final_source_type,
+            lead_source_individual_override=resolution.lead_source_individual,
+            lead_source_vc_investor_id=resolution.lead_source_vc_investor_id,
+            review_notes=review_notes,
         )
 
         # 5g. Create Search (the idempotency anchor)
@@ -267,6 +303,21 @@ def process_one_lead(
     )
 
 
+def _referrer_email(
+    llm_email: str | None, inner_from: str | None, individual: str | None
+) -> str | None:
+    """The referrer's address: what the model found, else the forwarded
+    sender *if* that sender is the named referrer."""
+    if llm_email:
+        return llm_email
+    if inner_from and individual:
+        name_tokens = norm_person(individual).split()
+        sender = norm_person(inner_from)
+        if name_tokens and all(t in sender.split() for t in name_tokens[:1]):
+            return inner_from
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Full-run aggregator
 # ---------------------------------------------------------------------------
@@ -286,10 +337,13 @@ def run(
     logger.info("pipeline_run_start", extra={"count": len(emails), "dry_run": dry_run})
 
     results: list[ProcessResult] = []
+    index: RelationshipIndex | None = None
+    if emails:
+        index = airtable.load_relationship_index()
     for email in emails:
         try:
             result = process_one_lead(
-                email, gmail=gmail, airtable=airtable, llm=llm, dry_run=dry_run
+                email, gmail=gmail, airtable=airtable, llm=llm, dry_run=dry_run, index=index
             )
         except Exception as exc:  # noqa: BLE001 — defense in depth
             logger.exception("pipeline_unexpected_error", extra={"message_id": email.message_id})
@@ -425,8 +479,7 @@ def _run_fixture(path: Path, *, dry_run: bool) -> int:
     print(json.dumps(result.model_dump(mode="json"), indent=2, default=str))
     return (
         0
-        if result.status
-        in ("created", "skipped_duplicate", "skipped_filter", "skipped_no_lead")
+        if result.status in ("created", "skipped_duplicate", "skipped_filter", "skipped_no_lead")
         else 1
     )
 

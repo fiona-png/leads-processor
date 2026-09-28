@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 from unittest.mock import MagicMock
 
+from cole_leads.lead_source import ClientRow, InvestorRow, RelationshipIndex, SearchRow
 from cole_leads.models import (
     CompanyResearch,
     Lead,
@@ -83,6 +84,9 @@ def _airtable_mock(**defaults: Any) -> MagicMock:
     m.find_client_by_name.return_value = defaults.get("find_client", None)
     m.has_closed_searches_for_client.return_value = defaults.get("has_closes", False)
     m.create_search.return_value = defaults.get("search_id", "recSEARCH_NEW")
+    m.load_relationship_index.return_value = defaults.get(
+        "index", RelationshipIndex(clients=[], investors=[], searches=[])
+    )
     return m
 
 
@@ -130,7 +134,8 @@ class TestHappyPath:
         # idempotency check, then client, then investors, then link, then lookup,
         # then closes check, then create_search.
         assert method_calls[0] == "search_exists_for_message_id"
-        assert method_calls[1] == "upsert_client"
+        assert method_calls[1] == "load_relationship_index"
+        assert "upsert_client" in method_calls
         assert method_calls.count("find_or_create_investor") == 2
         assert "link_investors_to_client" in method_calls
         assert method_calls.index("link_investors_to_client") > method_calls.index(
@@ -348,43 +353,95 @@ class TestInvestorHandling:
 # ---------------------------------------------------------------------------
 
 
+def _index(**kw: Any) -> RelationshipIndex:
+    return RelationshipIndex(
+        clients=kw.get("clients", []),
+        investors=kw.get("investors", []),
+        searches=kw.get("searches", []),
+    )
+
+
+_BREXBROS = ClientRow(id="recBREXBROS", name="Brexbros Ventures", website="brexbros.vc")
+_BREXBROS_INV = InvestorRow(id="invBREXBROS", name="Brexbros Ventures")
+
+
 class TestLeadSourceResolution:
     def test_resolved_to_existing_client_record(self):
-        gmail = _gmail_mock()
-        airtable = _airtable_mock(client_id="recHELIOS")
-        airtable.find_client_by_name.return_value = "recBREXBROS"  # source company exists
-        llm = _llm_mock()
+        airtable = _airtable_mock(
+            client_id="recHELIOS",
+            index=_index(clients=[_BREXBROS], investors=[_BREXBROS_INV]),
+        )
 
-        process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=_llm_mock())
 
         sent = airtable.create_search.call_args.args[0]
         assert sent.lead_source_company_record_id == "recBREXBROS"
+        assert sent.lead_source_vc_investor_id == "invBREXBROS"
+        assert sent.lead_source_type == "VC"
 
     def test_fallback_to_self_when_company_type_and_no_source_record(self):
-        gmail = _gmail_mock()
         airtable = _airtable_mock(client_id="recHELIOS")
-        airtable.find_client_by_name.return_value = None  # source not in clients
-        # lead_source_type = "Company" — hiring company is its own source.
-        llm = _llm_mock(_lead(parsed={"lead_source_type": "Company"}))
+        llm = _llm_mock(_lead(parsed={"lead_source_type": "Company", "lead_source_company": None}))
 
-        process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
 
         sent = airtable.create_search.call_args.args[0]
         assert sent.lead_source_company_record_id == "recHELIOS"
 
-    def test_no_lead_source_company_no_lookup(self):
-        gmail = _gmail_mock()
+    def test_no_lead_source_company_no_link(self):
         airtable = _airtable_mock()
         llm = _llm_mock(
             _lead(parsed={"lead_source_company": None, "lead_source_type": "Candidate or Friend"})
         )
 
-        process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
 
-        # find_client_by_name should NOT have been called for the source.
-        airtable.find_client_by_name.assert_not_called()
         sent = airtable.create_search.call_args.args[0]
         assert sent.lead_source_company_record_id is None
+        assert sent.lead_source_type == "Candidate or Friend"
+
+    def test_known_vc_referrer_overrides_candidate_or_friend(self):
+        """The Paul Cho case: model says friend, Cole's history says Sequoia / VC."""
+        seq = ClientRow(id="recSEQ", name="Sequoia Capital", website="sequoiacap.com")
+        history = [
+            SearchRow(
+                id=f"recS{i}",
+                client_ids=(f"recPORT{i}",),
+                lead_date=date(2025, 1, i + 1),
+                lead_source_individuals=("Paul Cho",),
+                lead_source_client_ids=("recSEQ",),
+                lead_source_vc_ids=("invSEQ",) if i == 0 else (),
+                lead_source_type="VC",
+            )
+            for i in range(5)
+        ]
+        airtable = _airtable_mock(
+            index=_index(
+                clients=[seq],
+                investors=[InvestorRow(id="invSEQ", name="Sequoia")],
+                searches=history,
+            )
+        )
+        llm = _llm_mock(
+            _lead(
+                parsed={
+                    "lead_source_individual": "paul cho",
+                    "lead_source_company": None,
+                    "lead_source_type": "Candidate or Friend",
+                }
+            )
+        )
+        email = _raw_email(body_text="Paul Cho from Sequoia wanted to intro Helios Energy.")
+
+        process_one_lead(email, gmail=_gmail_mock(), airtable=airtable, llm=llm)
+
+        sent = airtable.create_search.call_args.args[0]
+        assert sent.lead_source_type == "VC"
+        assert sent.lead_source_company_record_id == "recSEQ"
+        assert sent.lead_source_vc_investor_id == "invSEQ"
+        assert sent.lead_source_individual == "Paul Cho"  # canonical spelling
+        hints = llm.parse_and_research.call_args.kwargs["relationship_hints"]
+        assert hints and "Paul Cho" in hints[0] and "Sequoia Capital" in hints[0]
 
 
 # ---------------------------------------------------------------------------
@@ -393,26 +450,61 @@ class TestLeadSourceResolution:
 
 
 class TestExistingClientOverride:
-    def test_prior_closes_force_existing_client(self):
-        gmail = _gmail_mock()
-        airtable = _airtable_mock(has_closes=True)
-        # LLM classified as VC, but client has prior closes → forced override.
-        llm = _llm_mock()
+    @staticmethod
+    def _history(**kw: Any) -> RelationshipIndex:
+        helios = ClientRow(id="recHELIOS", name="Helios Energy", website="https://helios.energy")
+        prior = SearchRow(
+            id="recOLD",
+            client_ids=("recHELIOS",),
+            status=kw.get("status", "Closed"),
+            outcome=kw.get("outcome", "Won"),
+            lead_date=kw.get("when", date(2024, 3, 1)),
+        )
+        return _index(
+            clients=[helios, *kw.get("extra_clients", [])],
+            investors=kw.get("investors", []),
+            searches=[prior],
+        )
 
-        process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+    def test_prior_closes_force_existing_client(self):
+        airtable = _airtable_mock(index=self._history())
+        llm = _llm_mock(_lead(parsed={"lead_source_type": "Company", "lead_source_company": None}))
+
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
 
         sent = airtable.create_search.call_args.args[0]
         assert sent.lead_source_type == "Existing Client"
+        assert sent.client_record_id == "recHELIOS"  # matched by website, no new client
+        airtable.upsert_client.assert_not_called()
 
-    def test_no_prior_closes_uses_llm_classification(self):
-        gmail = _gmail_mock()
-        airtable = _airtable_mock(has_closes=False)
-        llm = _llm_mock()
+    def test_vc_intro_to_existing_client_stays_vc_and_flags_review(self):
+        airtable = _airtable_mock(
+            index=self._history(extra_clients=[_BREXBROS], investors=[_BREXBROS_INV])
+        )
 
-        process_one_lead(_raw_email(), gmail=gmail, airtable=airtable, llm=llm)
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=_llm_mock())
 
         sent = airtable.create_search.call_args.args[0]
         assert sent.lead_source_type == "VC"
+        assert sent.needs_review is True
+        assert "Existing Client" in (sent.review_notes or "")
+
+    def test_engagement_after_lead_date_does_not_count(self):
+        airtable = _airtable_mock(index=self._history(when=date(2027, 1, 1)))
+        llm = _llm_mock(_lead(parsed={"lead_source_type": "Company", "lead_source_company": None}))
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
+        assert airtable.create_search.call_args.args[0].lead_source_type == "Company"
+
+    def test_passed_lead_is_not_an_engagement(self):
+        airtable = _airtable_mock(index=self._history(status="Pass", outcome="Pass"))
+        llm = _llm_mock(_lead(parsed={"lead_source_type": "Company", "lead_source_company": None}))
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
+        assert airtable.create_search.call_args.args[0].lead_source_type == "Company"
+
+    def test_no_prior_closes_uses_llm_classification(self):
+        airtable = _airtable_mock()
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=_llm_mock())
+        assert airtable.create_search.call_args.args[0].lead_source_type == "VC"
 
 
 # ---------------------------------------------------------------------------

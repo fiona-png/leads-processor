@@ -467,7 +467,7 @@ class TestCreateSearch:
         assert f[SEARCH_GMAIL_MESSAGE_ID] == "abc123"
         # Optionals that were provided
         assert f[SEARCH_LEAD_SOURCE] == ["recACCEL"]
-        assert f[SEARCH_LEAD_SOURCE_INDIVIDUAL] == "Jane Investor"
+        assert f[SEARCH_LEAD_SOURCE_INDIVIDUAL] == ["Jane Investor"]
         assert f[SEARCH_LEAD_RECIPIENT] == ["recMATT"]
         assert f[SEARCH_SENIORITY] == "Chief"
         assert f[SEARCH_ROLE] == ["Sales"]

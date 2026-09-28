@@ -79,7 +79,11 @@ _LEAD_TOOL_SCHEMA: dict[str, Any] = {
                 },
                 "lead_source_company": {
                     "type": ["string", "null"],
-                    "description": "External referring company.",
+                    "description": "Organization the referrer works at (e.g. their VC firm), even if they wrote from a personal address.",
+                },
+                "lead_source_email": {
+                    "type": ["string", "null"],
+                    "description": "Email address of the referrer, exactly as shown in the thread. null if not shown.",
                 },
                 "lead_source_type": {
                     "type": "string",
@@ -88,8 +92,6 @@ _LEAD_TOOL_SCHEMA: dict[str, Any] = {
                         "Existing Client",
                         "VC",
                         "Candidate or Friend",
-                        "Advisors",
-                        "Takeover",
                     ],
                 },
                 "lead_notes": {"type": "string"},
@@ -163,13 +165,14 @@ CRITICAL RULES:
 - If the email isn't actually an executive-search lead (e.g. internal chatter, a calendar reminder, an unrelated note that happened to mention a role), set `client` to null. The pipeline will skip the row. Other parsed fields can be filled with best-effort placeholders in that case — they won't be used.
 - `lead_recipient` is the first name (lowercase) of the Cole team member the *original* lead email was sent TO. Look at the inner forwarded `To:` header, not the outer envelope.
 - `lead_source_individual` is the person who referred the lead. NEVER a Cole team member. If the forwarded email is from an internal Cole address, the source is somewhere earlier in the chain.
-- `lead_source_type` rules:
-    * "VC" if the referrer is at a venture firm
-    * "Existing Client" if the referrer's company has previously hired Cole (will be overridden downstream too)
-    * "Candidate or Friend" if it's an individual not affiliated with a firm
-    * "Company" if it's the hiring company itself reaching out
-    * "Advisors" if from an advisor / board member
-    * "Takeover" if the lead is taking over an existing engagement
+- `lead_source_company` is the organization the referrer works at — check signatures, email domains and titles (e.g. "Talent Partner, Sequoia"). Fill it even if they wrote from a personal address.
+- `lead_source_email` is the referrer's email address if it appears anywhere in the thread.
+- `lead_source_type` is your best guess; it is re-checked against Cole's Airtable history downstream:
+    * "VC" if the referrer works at a venture / growth / PE firm (talent partners, platform teams, partners)
+    * "Existing Client" if the hiring company or the referrer's company has hired Cole before
+    * "Company" if the hiring company itself reached out (founder, exec or recruiter at that company)
+    * "Candidate or Friend" only for an individual not acting for any of the above
+- If a "Known Cole relationships" section is provided, treat it as ground truth about who those people are.
 - `search_type` rules:
     * Pre-Seed / Seed / A / B -> "Core"
     * C / D -> "Strategic"
@@ -191,6 +194,7 @@ def build_user_message(
     outer_to: str,
     outer_received_at: str,
     inner: ForwardedHeaders,
+    relationship_hints: list[str] | None = None,
 ) -> str:
     """Compose the user-message text shown to Claude.
 
@@ -213,6 +217,12 @@ def build_user_message(
         "# Full body",
         body_text,
     ]
+    if relationship_hints:
+        parts += [
+            "",
+            "# Known Cole relationships (from Cole's Airtable history)",
+            *relationship_hints,
+        ]
     return "\n".join(parts)
 
 
@@ -226,6 +236,7 @@ def extract_lead(
     inner: ForwardedHeaders,
     client: Anthropic,
     model: str = DEFAULT_MODEL,
+    relationship_hints: list[str] | None = None,
 ) -> Lead:
     """Run the parse+research call and return a validated `Lead`.
 
@@ -238,6 +249,7 @@ def extract_lead(
         outer_to=outer_to,
         outer_received_at=outer_received_at,
         inner=inner,
+        relationship_hints=relationship_hints,
     )
 
     response = client.messages.create(
@@ -288,7 +300,12 @@ class LLMClient:
         self._client = anthropic
         self._model = model
 
-    def parse_and_research(self, raw_email: RawEmail, inner_headers: ForwardedHeaders) -> Lead:
+    def parse_and_research(
+        self,
+        raw_email: RawEmail,
+        inner_headers: ForwardedHeaders,
+        relationship_hints: list[str] | None = None,
+    ) -> Lead:
         """Run one Claude call to parse the forward and research the client company."""
         return extract_lead(
             body_text=raw_email.body_text,
@@ -299,4 +316,5 @@ class LLMClient:
             inner=inner_headers,
             client=self._client,
             model=self._model,
+            relationship_hints=relationship_hints,
         )
