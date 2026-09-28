@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from . import filters
 from .config import TEAM_MAP
+from .derive import finalize_lead
 from .lead_source import RelationshipIndex, norm_person, resolve_lead_source
 from .logging import get_logger
 from .models import (
@@ -147,11 +148,27 @@ def process_one_lead(
             dry_run=dry_run,
         )
 
+    # --- 4b. Deterministic clean-up: role vs title, ARR units, Search Type
+    # from ARR, HQ to an existing option, sanity flags.
+    lead, review_notes = finalize_lead(lead, hq_options=index.hq_options)
+    logger.info(
+        "pipeline_finalized_lead",
+        extra={
+            "message_id": msg_id,
+            "roles": [lead.parsed.role, *lead.parsed.additional_roles],
+            "seniority": lead.parsed.seniority,
+            "series": lead.research.series,
+            "biz_arr": lead.research.biz_arr,
+            "arr_basis": lead.research.arr_basis,
+            "search_type": lead.research.search_type,
+            "notes": review_notes,
+        },
+    )
+
     # --- 5. Airtable writes ------------------------------------------------
     try:
         # 5a. Client: match an existing record by website domain or exact name
         # first, so "TRM labs" / trmlabs.com doesn't spawn a duplicate client.
-        review_notes: list[str] = []
         existing_client = index.client_for(
             lead.parsed.client, lead.research.website, fuzzy=False
         ) or airtable.find_client_by_name(lead.parsed.client)
@@ -183,16 +200,25 @@ def process_one_lead(
 
         # 5b. Investors
         investor_ids: list[str] = []
+        new_investors: list[str] = []
         for inv_name in lead.research.investors:
             if dry_run:
-                inv_id = f"rec_DRY_INV_{len(investor_ids) + 1}"
+                inv_id = index.investor_match(inv_name) or f"rec_DRY_INV_{len(investor_ids) + 1}"
                 logger.info(
                     "pipeline_dry_would_upsert_investor",
                     extra={"investor": inv_name, "placeholder_id": inv_id},
                 )
             else:
-                inv_id = airtable.find_or_create_investor(inv_name)
-            investor_ids.append(inv_id)
+                # Match "Sequoia" to the existing "Sequoia Capital" record
+                # instead of creating a near-duplicate.
+                inv_id = index.investor_match(inv_name)
+                if inv_id is None:
+                    inv_id = airtable.find_or_create_investor(inv_name)
+                    new_investors.append(inv_name)
+            if inv_id not in investor_ids:
+                investor_ids.append(inv_id)
+        if new_investors:
+            review_notes.append("New investor record(s) created: " + ", ".join(new_investors))
 
         # 5c. Link investors (skip when empty — no need to fetch + PATCH)
         if investor_ids:

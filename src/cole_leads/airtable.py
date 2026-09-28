@@ -325,7 +325,11 @@ class AirtableClient:
             for r in self._list_all(AIRTABLE_CLIENTS_TABLE, [CLIENT_NAME, CLIENT_WEBSITE])
         ]
         investors = [
-            InvestorRow(id=r["id"], name=r.get("fields", {}).get(INVESTOR_NAME, "") or "")
+            InvestorRow(
+                id=r["id"],
+                name=r.get("fields", {}).get(INVESTOR_NAME, "") or "",
+                created=r.get("createdTime", ""),
+            )
             for r in self._list_all(AIRTABLE_INVESTORS_TABLE, [INVESTOR_NAME])
         ]
         search_fields = [
@@ -340,10 +344,14 @@ class AirtableClient:
             SEARCH_LEAD_SOURCE,
             SEARCH_LEAD_SOURCE_VC,
             SEARCH_LEAD_SOURCE_TYPE,
+            SEARCH_COMPANY_HQ,
         ]
         searches = []
+        hq_values: set[str] = set()
         for r in self._list_all(AIRTABLE_SEARCHES_TABLE, search_fields):
             f = r.get("fields", {})
+            if f.get(SEARCH_COMPANY_HQ):
+                hq_values.add(f[SEARCH_COMPANY_HQ])
             searches.append(
                 SearchRow(
                     id=r["id"],
@@ -360,7 +368,9 @@ class AirtableClient:
                     lead_source_type=(f.get(SEARCH_LEAD_SOURCE_TYPE) or "").strip() or None,
                 )
             )
-        return RelationshipIndex(clients=clients, investors=investors, searches=searches)
+        return RelationshipIndex(
+            clients=clients, investors=investors, searches=searches, hq_options=sorted(hq_values)
+        )
 
     # ----- Searches: create --------------------------------------------------
 
@@ -393,7 +403,7 @@ class AirtableClient:
         if record.seniority is not None:
             fields[SEARCH_SENIORITY] = record.seniority
         if record.role is not None:
-            fields[SEARCH_ROLE] = [record.role]
+            fields[SEARCH_ROLE] = record.roles or [record.role]
         if record.biz_arr is not None:
             fields[SEARCH_BIZ_ARR] = record.biz_arr
         if record.company_hq is not None:

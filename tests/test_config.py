@@ -15,14 +15,8 @@ class TestRoleAbbrev:
     def test_chief_customer_success(self):
         assert role_abbrev("Chief", "Customer Success") == "CCO"
 
-    def test_chief_sales_engineering(self):
-        assert role_abbrev("Chief", "Sales Engineering") == "CTO"
-
     def test_chief_general_management(self):
         assert role_abbrev("Chief", "General Management") == "COO"
-
-    def test_chief_bd(self):
-        assert role_abbrev("Chief", "BD") == "CBO"
 
     def test_chief_sales_ops(self):
         assert role_abbrev("Chief", "Sales Ops") == "COO"

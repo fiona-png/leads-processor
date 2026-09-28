@@ -50,7 +50,23 @@ pytest -m integration  # ONE real-services test; needs .env + costs ~$0.05
      and ticked **Leads For Fiona's Review** with a note in *Leads Review Notes*.
    * Hiring companies are matched to existing Client records by website domain
      before creating a new one, so "TRM labs" doesn't spawn a duplicate.
-7. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
+7. **Every other field is checked too** (`derive.py`, runs after the model):
+   * **Search Type** is computed from ARR at the Lead Date (<$16M Core, <$51M
+     Strategic, else Franchise; Public = Franchise) - the model no longer picks it.
+   * **Role / Seniority** use Airtable's exact options, and the literal job title
+     wins if the model disagrees ("CRO" is always Chief/Sales). Multi-role leads
+     ("CMO / VP Sales") get both roles.
+   * **ARR, Series, investors** are researched *as of the Lead Date* (the date is
+     in the prompt; rounds after it are ignored). ARR must come with a source and
+     year. Raw-dollar ARR is converted to $M; implausible combos (Series A with
+     $77M ARR, ARR equal to funding raised) are flagged for review.
+   * **Investors** are matched to existing records ("Sequoia" -> "Sequoia
+     Capital") instead of creating near-duplicates; genuinely new ones are listed
+     in the review note.
+   * **HQ** is matched to an existing Airtable option ("New York City" -> "New York").
+   * **Rolo (optional):** set `ROLO_MCP_URL` / `ROLO_MCP_TOKEN` repo secrets and
+     the model checks Rolo's revenue-by-year for the lead year before the web.
+8. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
 
 ## Cutover playbook
 
