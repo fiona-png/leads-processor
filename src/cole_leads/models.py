@@ -85,6 +85,9 @@ class ParsedEmail(BaseModel):
     lead_source_company: str | None = Field(
         None, description="External referring company (VC firm, candidate's employer, etc.)."
     )
+    lead_source_email: str | None = Field(
+        None, description="Email address of the referrer, if shown anywhere in the thread."
+    )
     lead_source_type: LeadSourceType
     lead_notes: str = Field(..., description="1-2 sentence human-readable summary.")
 
@@ -127,7 +130,10 @@ class SearchRecord(BaseModel):
     lead_recipient_record_id: str | None = None
     lead_source_company_record_id: str | None = None
     lead_source_individual: str | None = None
+    lead_source_vc_investor_id: str | None = None
     lead_source_type: LeadSourceType
+    needs_review: bool = False
+    review_notes: str | None = None
     lead_date: date
     lead_notes: str
     role: Role
@@ -153,6 +159,9 @@ class SearchRecord(BaseModel):
         lead_source_id: str | None,
         gmail_message_id: str,
         lead_source_type_override: LeadSourceType | None = None,
+        lead_source_individual_override: str | None = None,
+        lead_source_vc_investor_id: str | None = None,
+        review_notes: list[str] | None = None,
     ) -> SearchRecord:
         """Build a SearchRecord by combining a Lead with resolved Airtable IDs.
 
@@ -167,8 +176,11 @@ class SearchRecord(BaseModel):
             client_record_id=client_id,
             lead_recipient_record_id=recipient_id,
             lead_source_company_record_id=lead_source_id,
-            lead_source_individual=p.lead_source_individual,
+            lead_source_individual=lead_source_individual_override or p.lead_source_individual,
+            lead_source_vc_investor_id=lead_source_vc_investor_id,
             lead_source_type=lead_source_type_override or p.lead_source_type,
+            needs_review=bool(review_notes),
+            review_notes=" | ".join(review_notes) if review_notes else None,
             lead_date=p.lead_date,
             lead_notes=p.lead_notes,
             role=p.role,

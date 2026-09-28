@@ -33,7 +33,24 @@ pytest -m integration  # ONE real-services test; needs .env + costs ~$0.05
 3. **Exact-match Airtable lookups.** No more substring collisions between similar client names.
 4. **Inner forwarded headers parsed deterministically** before the LLM sees the message, so the LLM doesn't have to guess the original sender.
 5. **Runs on GitHub Actions cron every 15 min** instead of n8n's 1-minute poll.
-6. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
+6. **Lead Source Type checked against Cole's own history.** The model only
+   sees the email, so it can't know that Paul Cho is Sequoia's talent partner or
+   that TRM Labs hired Cole in 2022. `lead_source.py` loads Clients, Investors and
+   every Search once per run and overrides the model:
+   * **VC** — referrer's email domain / signature firm / past leads point at a
+     firm that has sent Cole VC leads before (also fills *Lead Source (VC Only)*).
+     VC intros stay VC even if Cole once ran a search for the VC firm itself.
+   * **Existing Client** — hiring company (or the referrer's company) had a
+     search Won / Closed / Abandoned / Canceled *before the Lead Date*. Matched by
+     record, website domain, and normalized name so duplicate client rows
+     ("Atob" / "AtoB") don't hide history.
+   * Precedence: VC > Existing Client > Company > referrer history > model.
+   * Anything ambiguous (VC intro to an existing client, a duplicate-looking
+     client, a "friend" at something that looks like a fund) is written anyway
+     and ticked **Leads For Fiona's Review** with a note in *Leads Review Notes*.
+   * Hiring companies are matched to existing Client records by website domain
+     before creating a new one, so "TRM labs" doesn't spawn a duplicate.
+7. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
 
 ## Cutover playbook
 

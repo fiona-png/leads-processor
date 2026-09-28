@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .filters import ForwardedHeaders
+from .lead_source import RelationshipIndex
 from .logging import get_logger
 from .models import CompanyResearch, Lead, ParsedEmail, RawEmail, SearchRecord
 
@@ -37,6 +38,9 @@ class StubAirtableClient:
 
     def search_exists_for_message_id(self, message_id: str) -> bool:
         return False
+
+    def load_relationship_index(self) -> RelationshipIndex:
+        return RelationshipIndex(clients=[], investors=[], searches=[])
 
     def find_client_by_name(self, name: str) -> str | None:
         return None
@@ -104,7 +108,12 @@ class StubLLMClient:
     def __init__(self, *, fixture_path: Path) -> None:
         self._stem = fixture_path.stem
 
-    def parse_and_research(self, raw_email: RawEmail, inner: ForwardedHeaders) -> Lead:
+    def parse_and_research(
+        self,
+        raw_email: RawEmail,
+        inner: ForwardedHeaders,
+        relationship_hints: list[str] | None = None,
+    ) -> Lead:
         builder = _CANNED.get(self._stem)
         if builder is None:
             raise ValueError(
