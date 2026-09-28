@@ -620,3 +620,57 @@ class TestDelete:
         assert seen["method"] == "DELETE"
         assert AIRTABLE_CLIENTS_TABLE in seen["path"]
         assert seen["path"].endswith("/recCLIENT")
+
+
+class TestAudit:
+    def test_write_claude_checks_batches_of_ten(self):
+        calls: list[dict] = []
+
+        def h(request: httpx.Request) -> httpx.Response:
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={"records": []})
+
+        with make_client(h) as at:
+            n = at.write_claude_checks({f"rec{i:014d}": "OK" for i in range(23)})
+        assert n == 23
+        assert [len(c["records"]) for c in calls] == [10, 10, 3]
+        assert calls[0]["records"][0]["fields"] == {"Claude Lead Check": "OK"}
+
+    def test_load_audit_rows_parses_fields(self):
+        from datetime import date
+
+        from cole_leads.lead_source import ClientRow, InvestorRow, RelationshipIndex
+
+        def h(request: httpx.Request) -> httpx.Response:
+            assert "Gmail Message ID" in request.url.params.get("filterByFormula")
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "id": "recS1",
+                            "fields": {
+                                "Search": "Acme CRO",
+                                "Lead Date": "2026-09-01",
+                                "Client": ["recACME"],
+                                "Role": ["Sales"],
+                                "Seniority": "Chief",
+                                "Biz ARR": 12,
+                                "Claude Lead Check": "OK - audited 2026-09-01",
+                            },
+                        }
+                    ]
+                },
+            )
+
+        idx = RelationshipIndex(
+            clients=[ClientRow(id="recACME", name="Acme", investor_ids=("invA",))],
+            investors=[InvestorRow(id="invA", name="Accel")],
+            searches=[],
+        )
+        with make_client(h) as at:
+            rows, named = at.load_audit_rows(since=date(2026, 6, 1), bot_only=True, index=idx)
+        r = rows[0]
+        assert r.name == "Acme CRO" and r.arr == 12 and r.roles == ("Sales",)
+        assert r.client_investor_names == ("Accel",)
+        assert named == [("recS1", "Acme CRO", date(2026, 9, 1))]

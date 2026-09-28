@@ -658,3 +658,20 @@ def test_pipeline_module_exports_expected_surface():
     assert hasattr(pipeline, "process_one_lead")
     assert hasattr(pipeline, "run")
     assert hasattr(pipeline, "main")
+
+
+class TestClaudeLeadCheck:
+    def test_always_filled_ok_when_clean(self):
+        airtable = _airtable_mock()
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=_llm_mock())
+        sent = airtable.create_search.call_args.args[0]
+        assert sent.claude_check and (
+            sent.claude_check.startswith("OK - checked on entry") or ":" in sent.claude_check
+        )
+
+    def test_review_notes_go_into_claude_check(self):
+        airtable = _airtable_mock()
+        llm = _llm_mock(_lead(parsed={"role_title": "CRO", "seniority": "VP"}))
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
+        sent = airtable.create_search.call_args.args[0]
+        assert "Seniority" in sent.claude_check
