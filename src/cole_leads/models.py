@@ -147,6 +147,7 @@ class SearchRecord(BaseModel):
     lead_source_type: LeadSourceType
     needs_review: bool = False
     review_notes: str | None = None
+    claude_check: str | None = None  # "Claude Lead Check" - always set by the pipeline
     lead_date: date
     lead_notes: str
     role: Role

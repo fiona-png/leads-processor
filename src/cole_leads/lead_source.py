@@ -162,6 +162,7 @@ class ClientRow:
     id: str
     name: str
     website: str | None = None
+    investor_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

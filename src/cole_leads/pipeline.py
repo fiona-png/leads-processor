@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -284,6 +286,12 @@ def process_one_lead(
             lead_source_individual_override=resolution.lead_source_individual,
             lead_source_vc_investor_id=resolution.lead_source_vc_investor_id,
             review_notes=review_notes,
+        )
+        # Claude Lead Check is always filled: the bot's own review notes, or OK.
+        record.claude_check = (
+            "\n".join(n if re.match(r"^[A-Z ]+:", n) else f"CHECK: {n}" for n in review_notes)
+            if review_notes
+            else f"OK - checked on entry {date.today().isoformat()}"
         )
 
         # 5g. Create Search (the idempotency anchor)

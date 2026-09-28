@@ -66,7 +66,18 @@ pytest -m integration  # ONE real-services test; needs .env + costs ~$0.05
    * **HQ** is matched to an existing Airtable option ("New York City" -> "New York").
    * **Rolo (optional):** set `ROLO_MCP_URL` / `ROLO_MCP_TOKEN` repo secrets and
      the model checks Rolo's revenue-by-year for the lead year before the web.
-8. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
+8. **Claude Lead Check is always filled.** New leads get the bot's review notes,
+   or `OK - checked on entry <date>`. A scheduled audit (`.github/workflows/audit.yml`,
+   Mon + Thu 06:40 PT; `scripts/audit_leads.py`) re-checks bot-created leads from the
+   last 120 days and fills the field for every row: one prefixed line per issue
+   (LEAD SOURCE TYPE, SEARCH TYPE, ROLE, SENIORITY, MISSING, POSSIBLE DUPLICATE,
+   INVESTORS, ARR, INCOMPLETE, CHECK) or `OK - audited <date>`.
+   * Fix a row and clear the cell - the next audit re-checks it.
+   * Happy with a row as it is? Start the cell with `REVIEWED` and the audit skips it.
+   * Lines with other prefixes (e.g. BIZ ARR / SERIES from a Rolo review) are kept.
+   * The audit only ever writes the Claude Lead Check field. Run it by hand from the
+     Actions tab (options: days, include non-bot leads, dry run).
+9. **Tested.** Pytest fixtures from real (sanitized) leads, plus a gated real-services smoke test.
 
 ## Cutover playbook
 

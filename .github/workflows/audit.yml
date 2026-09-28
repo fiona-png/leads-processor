@@ -1,0 +1,60 @@
+name: Audit leads (Claude Lead Check)
+
+on:
+  schedule:
+    # Mondays and Thursdays, 06:40 PT (13:40 UTC)
+    - cron: "40 13 * * 1,4"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Audit leads dated within N days (0 = all)."
+        required: false
+        default: "120"
+      all_leads:
+        description: "Include leads not created by the bot."
+        type: boolean
+        default: false
+      dry_run:
+        description: "Report only - don't write to Airtable."
+        type: boolean
+        default: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: cole-leads-audit
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Audit
+        env:
+          AIRTABLE_PAT: ${{ secrets.AIRTABLE_PAT }}
+          # get_settings() requires these to exist; the audit itself only uses Airtable.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          DAYS: ${{ github.event.inputs.days || '120' }}
+          ALL_LEADS: ${{ github.event.inputs.all_leads || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          flags="--days ${DAYS}"
+          [ "${ALL_LEADS}" = "true" ] && flags="${flags} --all-leads"
+          [ "${DRY_RUN}" = "true" ] && flags="${flags} --dry-run"
+          python scripts/audit_leads.py $flags | tee /tmp/audit.txt
+      - name: Job summary
+        if: always()
+        run: |
+          echo '## Lead audit' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 30 /tmp/audit.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -17,11 +17,12 @@ Design rules:
 from __future__ import annotations
 
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
 
+from .audit import AuditRow
 from .config import (
     AIRTABLE_BASE_ID,
     AIRTABLE_CLIENTS_TABLE,
@@ -60,6 +61,8 @@ SEARCH_GMAIL_MESSAGE_ID = "Gmail Message ID"
 SEARCH_LEAD_SOURCE_VC = "Lead Source (VC Only)"  # link -> Investors
 SEARCH_REVIEW_FLAG = "Leads For Fiona's Review"
 SEARCH_REVIEW_NOTES = "Leads Review Notes"
+SEARCH_CLAUDE_CHECK = "Claude Lead Check"
+SEARCH_ROLE_FIELD = "Role"
 SEARCH_OUTCOME_DATE = "Outcome Date"
 SEARCH_KICKOFF = "Kickoff"
 SEARCH_CLOSE_DATE = "Close Date"
@@ -321,8 +324,11 @@ class AirtableClient:
                 id=r["id"],
                 name=r.get("fields", {}).get(CLIENT_NAME, "") or "",
                 website=r.get("fields", {}).get(CLIENT_WEBSITE),
+                investor_ids=_as_tuple(r.get("fields", {}).get(CLIENT_INVESTORS)),
             )
-            for r in self._list_all(AIRTABLE_CLIENTS_TABLE, [CLIENT_NAME, CLIENT_WEBSITE])
+            for r in self._list_all(
+                AIRTABLE_CLIENTS_TABLE, [CLIENT_NAME, CLIENT_WEBSITE, CLIENT_INVESTORS]
+            )
         ]
         investors = [
             InvestorRow(
@@ -372,6 +378,101 @@ class AirtableClient:
             clients=clients, investors=investors, searches=searches, hq_options=sorted(hq_values)
         )
 
+    # ----- Audit ---------------------------------------------------------------
+
+    def load_audit_rows(
+        self, *, since: date | None, bot_only: bool, index: RelationshipIndex
+    ) -> tuple[list[AuditRow], list[tuple[str, str, date]]]:
+        """Rows to audit, plus (id, name, lead_date) for every named lead in the
+        audit window (used for duplicate detection)."""
+        conds = []
+        if bot_only:
+            conds.append(f"{{{SEARCH_GMAIL_MESSAGE_ID}}}!=''")
+        if since:
+            conds.append(
+                f"IS_AFTER({{{SEARCH_LEAD_DATE}}}, '{(since - timedelta(days=1)).isoformat()}')"
+            )
+        formula = "AND(" + ",".join(conds) + ")" if conds else ""
+        fields = [
+            SEARCH_NAME,
+            SEARCH_LEAD_DATE,
+            SEARCH_CLIENT,
+            SEARCH_LEAD_SOURCE_TYPE,
+            SEARCH_LEAD_SOURCE_INDIVIDUAL,
+            SEARCH_LEAD_SOURCE,
+            SEARCH_LEAD_SOURCE_VC,
+            SEARCH_ROLE_FIELD,
+            SEARCH_SENIORITY,
+            SEARCH_SERIES,
+            SEARCH_SEARCH_TYPE,
+            SEARCH_BIZ_ARR,
+            SEARCH_LEAD_RECIPIENT,
+            SEARCH_CLAUDE_CHECK,
+        ]
+        out: list[AuditRow] = []
+        named: list[tuple[str, str, date]] = []
+        offset: str | None = None
+        while True:
+            params: list[tuple[str, str | int]] = [("pageSize", 100)]
+            params += [("fields[]", f) for f in fields]
+            if formula:
+                params.append(("filterByFormula", formula))
+            if offset:
+                params.append(("offset", offset))
+            body = self._request(
+                "GET", f"/{AIRTABLE_BASE_ID}/{AIRTABLE_SEARCHES_TABLE}", params=params
+            ).json()
+            for r in body.get("records", []):
+                f = r.get("fields", {})
+                client_ids = _as_tuple(f.get(SEARCH_CLIENT))
+                inv_names: list[str] = []
+                for cid in client_ids[:1]:
+                    c = index.clients.get(cid)
+                    if c:
+                        inv_names = [
+                            index.investors[i].name for i in c.investor_ids if i in index.investors
+                        ]
+                row = AuditRow(
+                    id=r["id"],
+                    name=(f.get(SEARCH_NAME) or "").strip() or None,
+                    lead_date=_parse_date(f.get(SEARCH_LEAD_DATE)),
+                    client_ids=client_ids,
+                    lead_source_type=(f.get(SEARCH_LEAD_SOURCE_TYPE) or "").strip() or None,
+                    lead_source_individuals=_as_tuple(f.get(SEARCH_LEAD_SOURCE_INDIVIDUAL)),
+                    lead_source_client_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE)),
+                    lead_source_vc_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE_VC)),
+                    roles=_as_tuple(f.get(SEARCH_ROLE_FIELD)),
+                    seniority=f.get(SEARCH_SENIORITY),
+                    series=f.get(SEARCH_SERIES),
+                    search_type=f.get(SEARCH_SEARCH_TYPE),
+                    arr=f.get(SEARCH_BIZ_ARR),
+                    recipient_ids=_as_tuple(f.get(SEARCH_LEAD_RECIPIENT)),
+                    check_note=f.get(SEARCH_CLAUDE_CHECK),
+                    client_investor_names=tuple(inv_names),
+                )
+                out.append(row)
+                if row.name and row.lead_date:
+                    named.append((row.id, row.name, row.lead_date))
+            offset = body.get("offset")
+            if not offset:
+                return out, named
+
+    def write_claude_checks(self, notes: dict[str, str]) -> int:
+        """PATCH Claude Lead Check in batches of 10 (Airtable's limit)."""
+        items = list(notes.items())
+        for i in range(0, len(items), 10):
+            chunk = items[i : i + 10]
+            self._request(
+                "PATCH",
+                f"/{AIRTABLE_BASE_ID}/{AIRTABLE_SEARCHES_TABLE}",
+                json={
+                    "records": [
+                        {"id": rid, "fields": {SEARCH_CLAUDE_CHECK: text}} for rid, text in chunk
+                    ]
+                },
+            )
+        return len(items)
+
     # ----- Searches: create --------------------------------------------------
 
     def create_search(self, record: SearchRecord) -> str:
@@ -398,6 +499,8 @@ class AirtableClient:
         if record.needs_review:
             fields[SEARCH_REVIEW_FLAG] = True
             fields[SEARCH_REVIEW_NOTES] = record.review_notes
+        if record.claude_check:
+            fields[SEARCH_CLAUDE_CHECK] = record.claude_check
         if record.lead_recipient_record_id is not None:
             fields[SEARCH_LEAD_RECIPIENT] = [record.lead_recipient_record_id]
         if record.seniority is not None:
