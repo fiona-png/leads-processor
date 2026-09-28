@@ -7,26 +7,23 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+# Must match the Airtable select options exactly (Searches > Role / Seniority).
 Role = Literal[
     "Sales",
     "Marketing",
     "Sales Ops",
-    "BD",
     "Customer Success",
-    "Sales Engineering",
     "General Management",
     "Other Category",
 ]
 
-Seniority = Literal["VP", "Head", "Director", "Chief", "SVP"]
+Seniority = Literal["Chief", "SVP", "VP", "Head", "Director", "GM"]
 
 LeadSourceType = Literal[
     "Company",
     "Existing Client",
     "VC",
     "Candidate or Friend",
-    "Advisors",
-    "Takeover",
 ]
 
 BizType = Literal["Enterprise", "Consumer"]
@@ -44,6 +41,7 @@ Series = Literal[
     "F",
     "G",
     "Public",
+    "Private Equity",
     "Bootstrapped",
     "Unknown",
 ]
@@ -70,7 +68,13 @@ class ParsedEmail(BaseModel):
             "skips it without creating a Search record."
         ),
     )
+    role_title: str | None = Field(
+        None, description="The job title exactly as written in the email, e.g. 'VP of Sales'."
+    )
     role: Role
+    additional_roles: list[Role] = Field(
+        default_factory=list, description="Other roles if the lead covers several (e.g. CRO/VPM)."
+    )
     seniority: Seniority
     lead_recipient: str = Field(
         ..., description="First name lowercase of the Cole team member the lead was sent TO."
@@ -98,11 +102,20 @@ class CompanyResearch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     biz_type: BizType
-    biz_arr: float | None = Field(None, description="ARR in $M. null if unknown.")
+    biz_arr: float | None = Field(None, description="ARR/revenue in $M at the lead date.")
+    arr_basis: str | None = Field(
+        None, description="Where the ARR figure came from and which year it refers to."
+    )
     company_hq: str | None = Field(None, description="City name only, e.g. 'San Francisco'.")
     series: Series
-    search_type: SearchType
+    last_round_date: str | None = Field(
+        None, description="YYYY-MM of the last round announced BEFORE the lead date."
+    )
+    total_funding_m: float | None = Field(None, description="Total raised by the lead date, $M.")
+    # Derived from ARR by derive.search_type_for, never trusted from the model.
+    search_type: SearchType | None = None
     investors: list[str] = Field(default_factory=list)
+    research_confidence: Literal["high", "medium", "low"] | None = None
     website: str | None = None
 
 
@@ -137,12 +150,13 @@ class SearchRecord(BaseModel):
     lead_date: date
     lead_notes: str
     role: Role
+    roles: list[Role] = Field(default_factory=list)
     seniority: Seniority
     biz_type: BizType
     biz_arr: float | None = None
     company_hq: str | None = None
     series: Series
-    search_type: SearchType
+    search_type: SearchType | None = None
     website: str | None = None
     gmail_message_id: str
     status: Literal["Qualified"] = "Qualified"
@@ -172,7 +186,7 @@ class SearchRecord(BaseModel):
 
         p, r = lead.parsed, lead.research
         return cls(
-            search_name=build_search_name(p.client, p.seniority, p.role),
+            search_name=build_search_name(p.client, p.seniority, p.role, title=p.role_title),
             client_record_id=client_id,
             lead_recipient_record_id=recipient_id,
             lead_source_company_record_id=lead_source_id,
@@ -184,6 +198,7 @@ class SearchRecord(BaseModel):
             lead_date=p.lead_date,
             lead_notes=p.lead_notes,
             role=p.role,
+            roles=[p.role, *[x for x in p.additional_roles if x != p.role]],
             seniority=p.seniority,
             biz_type=r.biz_type,
             biz_arr=r.biz_arr,

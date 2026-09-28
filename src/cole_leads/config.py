@@ -61,9 +61,7 @@ CHIEF_ABBREV: dict[str, str] = {
     "Sales": "CRO",
     "Marketing": "CMO",
     "Customer Success": "CCO",
-    "Sales Engineering": "CTO",
     "General Management": "COO",
-    "BD": "CBO",
     "Sales Ops": "COO",
 }
 
@@ -78,8 +76,10 @@ def role_abbrev(seniority: str, role: str) -> str:
     return f"{seniority}{first_letter}"
 
 
-def search_name(client: str, seniority: str, role: str) -> str:
+def search_name(client: str, seniority: str, role: str, *, title: str | None = None) -> str:
     """`{client} {abbrev}`, the canonical Search record name."""
+    if title and "president" in title.lower() and "vice" not in title.lower():
+        return f"{client} President".strip()
     return f"{client} {role_abbrev(seniority, role)}".strip()
 
 

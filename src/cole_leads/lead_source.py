@@ -168,6 +168,7 @@ class ClientRow:
 class InvestorRow:
     id: str
     name: str
+    created: str = ""  # ISO timestamp; oldest record wins when names collide
 
 
 @dataclass(frozen=True)
@@ -232,7 +233,9 @@ class RelationshipIndex:
         clients: list[ClientRow],
         investors: list[InvestorRow],
         searches: list[SearchRow],
+        hq_options: list[str] | None = None,
     ) -> None:
+        self.hq_options = sorted(set(hq_options or []))
         self.clients = {c.id: c for c in clients}
         self.investors = {i.id: i for i in investors}
 
@@ -256,6 +259,12 @@ class RelationshipIndex:
             if inv.name.strip():
                 self._investor_by_exact.setdefault(inv.name.strip().lower(), inv.id)
         self._vc_investor_by_norm: dict[str, str] = {}
+        # Every investor by normalized name, oldest record first.
+        self._investor_by_norm_all: dict[str, str] = {}
+        for inv in sorted(investors, key=lambda i: i.created or "~"):
+            n = norm_name(inv.name)
+            if n and len(n) >= 3:
+                self._investor_by_norm_all.setdefault(n, inv.id)
 
         # Client records that history has used as a VC lead source.
         vc_counter: Counter[str] = Counter()
@@ -374,6 +383,19 @@ class RelationshipIndex:
         if any_investor and name:
             return self._investor_by_exact.get(name.strip().lower())
         return None
+
+    def investor_match(self, name: str | None) -> str | None:
+        """Existing Investors record for a firm name from research:
+        exact name first, then normalized ("Sequoia" -> "Sequoia Capital")."""
+        if not name or not name.strip():
+            return None
+        exact = self._investor_by_exact.get(name.strip().lower())
+        if exact:
+            return exact
+        n = norm_name(name)
+        if n in self._vc_investor_by_norm:
+            return self._vc_investor_by_norm[n]
+        return self._investor_by_norm_all.get(n) if n and len(n) >= 3 else None
 
     def is_vc_client(self, client_id: str | None) -> bool:
         return bool(client_id) and client_id in self._vc_client_ids

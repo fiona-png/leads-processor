@@ -362,9 +362,7 @@ def _make_bulk_service(
     whose `labels.list` returns the given labels."""
     service = MagicMock()
     msgs = service.users.return_value.messages.return_value
-    list_executes = [
-        MagicMock(execute=MagicMock(return_value=page)) for page in list_pages
-    ]
+    list_executes = [MagicMock(execute=MagicMock(return_value=page)) for page in list_pages]
     msgs.list.side_effect = list_executes
     # batchModify returns 204 No Content / None.
     msgs.batchModify.return_value.execute.return_value = None
@@ -417,9 +415,7 @@ class TestBulkApplyProcessedLabel:
         assert second_call_kwargs.get("pageToken") == "TOK2"
 
     def test_query_and_label_id_used_in_batch_modify(self):
-        service = _make_bulk_service(
-            list_pages=[{"messages": [{"id": "m1"}, {"id": "m2"}]}]
-        )
+        service = _make_bulk_service(list_pages=[{"messages": [{"id": "m1"}, {"id": "m2"}]}])
         client = GmailClient(service=service, user_email="me")
 
         client.bulk_apply_processed_label(self._Q)
@@ -450,9 +446,7 @@ class TestBulkApplyProcessedLabel:
         msgs = service.users.return_value.messages.return_value
         # Three chunks at 1000 each.
         assert msgs.batchModify.call_count == 3
-        chunk_sizes = [
-            len(call.kwargs["body"]["ids"]) for call in msgs.batchModify.call_args_list
-        ]
+        chunk_sizes = [len(call.kwargs["body"]["ids"]) for call in msgs.batchModify.call_args_list]
         assert chunk_sizes == [1000, 1000, 500]
         # First chunk starts at m0, third chunk ends at m2499.
         assert msgs.batchModify.call_args_list[0].kwargs["body"]["ids"][0] == "m0"
@@ -485,7 +479,5 @@ class TestBulkApplyProcessedLabel:
 
         client.bulk_apply_processed_label(self._Q)
 
-        body = service.users.return_value.messages.return_value.batchModify.call_args.kwargs[
-            "body"
-        ]
+        body = service.users.return_value.messages.return_value.batchModify.call_args.kwargs["body"]
         assert body["addLabelIds"] == ["LBL_PROCESSED_RIGHT"]
