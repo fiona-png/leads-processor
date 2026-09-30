@@ -29,6 +29,9 @@ class StubGmailClient:
     def mark_processed(self, message_id: str) -> None:
         logger.info("stub_gmail_mark_processed", extra={"message_id": message_id})
 
+    def mark_skipped(self, message_id: str, reason: str) -> None:
+        logger.info("stub_gmail_mark_skipped", extra={"message_id": message_id, "reason": reason})
+
     def mark_failed(self, message_id: str, error: str) -> None:
         logger.info("stub_gmail_mark_failed", extra={"message_id": message_id, "error": error})
 

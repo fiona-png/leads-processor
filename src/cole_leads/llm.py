@@ -17,7 +17,7 @@ from anthropic import Anthropic
 
 from .derive import ROLES, SENIORITIES
 from .filters import ForwardedHeaders
-from .models import Lead, RawEmail
+from .models import EmailImage, Lead, RawEmail
 
 # Anthropic model: latest Sonnet is a fine default for parse+research.
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -183,6 +183,7 @@ You receive ONE email containing a lead (someone telling Cole that a company is 
 PARSING RULES
 
 - `client` is the external hiring company, NEVER "Cole Group", "The Cole Group", or anything @colellc.com / @cole.co / @colegroup.com. Use the company's common name (e.g. "Rippling", not "People Center, Inc.").
+- Internal notes from Cole teammates to leads@ are often very short ("Simile CRO - texting with Katie from Index", "VP/CRO search (Battery Ventures) - lead came from Jenny at Battery"). Those ARE leads: the company is the client, the person/firm mentioned is the lead source. Screenshots attached to the email may hold the lead itself.
 - If the email isn't actually an executive-search lead (internal chatter, a calendar reminder, a newsletter, a candidate asking for advice), set `client` to null.
 - `lead_recipient` is the first name (lowercase) of the Cole team member the *original* lead email was sent TO (inner forwarded `To:` header, not the outer envelope).
 - `lead_date` is the date of the ORIGINAL email (inner `Date:` header), YYYY-MM-DD.
@@ -281,6 +282,7 @@ def extract_lead(
     relationship_hints: list[str] | None = None,
     extra_tools: list[dict[str, Any]] | None = None,
     extra_request: dict[str, Any] | None = None,
+    images: list[EmailImage] | None = None,
 ) -> Lead:
     """Run the parse+research call and return a validated `Lead`.
 
@@ -296,7 +298,24 @@ def extract_lead(
         relationship_hints=relationship_hints,
     )
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": user_text}]
+    content: Any = user_text
+    if images:
+        content = [
+            *(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": im.media_type, "data": im.data_b64},
+                }
+                for im in images
+            ),
+            {
+                "type": "text",
+                "text": user_text
+                + "\n\n# The email includes the screenshot(s) above - read them; they often "
+                "contain the actual lead (a text message, LinkedIn post or intro).",
+            },
+        ]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": content}]
     tools = [WEB_SEARCH_TOOL, EMIT_LEAD_TOOL, *(extra_tools or [])]
     extra: dict[str, Any] = dict(extra_request or {})
 
@@ -410,4 +429,5 @@ class LLMClient:
             model=self._model,
             relationship_hints=relationship_hints,
             extra_request=self._extra_request,
+            images=raw_email.images,
         )

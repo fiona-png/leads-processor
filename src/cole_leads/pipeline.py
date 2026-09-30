@@ -92,7 +92,7 @@ def process_one_lead(
             extra={"message_id": msg_id, "subject": raw_email.subject},
         )
         if not dry_run:
-            gmail.mark_processed(msg_id)
+            gmail.mark_skipped(msg_id, "reply")
         return ProcessResult(message_id=msg_id, status="skipped_filter", dry_run=dry_run)
 
     # --- 3. Inner forwarded headers ----------------------------------------
@@ -142,7 +142,7 @@ def process_one_lead(
     if lead.parsed.client is None:
         logger.info("pipeline_skip_no_lead", extra={"message_id": msg_id})
         if not dry_run:
-            gmail.mark_processed(msg_id)
+            gmail.mark_skipped(msg_id, "model: not a lead")
         return ProcessResult(
             message_id=msg_id,
             status="skipped_no_lead",
