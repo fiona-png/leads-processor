@@ -477,7 +477,8 @@ class TestExistingClientOverride:
         assert sent.client_record_id == "recHELIOS"  # matched by website, no new client
         airtable.upsert_client.assert_not_called()
 
-    def test_vc_intro_to_existing_client_stays_vc_and_flags_review(self):
+    def test_vc_intro_to_existing_client_is_existing_client(self):
+        """Simile: Index made the intro, but Simile already hired Cole."""
         airtable = _airtable_mock(
             index=self._history(extra_clients=[_BREXBROS], investors=[_BREXBROS_INV])
         )
@@ -485,9 +486,33 @@ class TestExistingClientOverride:
         process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=_llm_mock())
 
         sent = airtable.create_search.call_args.args[0]
-        assert sent.lead_source_type == "VC"
-        assert sent.needs_review is True
-        assert "Existing Client" in (sent.review_notes or "")
+        assert sent.lead_source_type == "Existing Client"
+        assert sent.lead_source_company_record_id == "recHELIOS"
+        assert sent.lead_source_vc_investor_id is None
+        assert "Also a VC intro" in (sent.review_notes or "")
+
+    def test_returning_client_gets_prior_arr_and_search_type(self):
+        """Simile CRO: research found no ARR; Simile HOM (Aug) had $20M / Strategic."""
+        helios = ClientRow(id="recHELIOS", name="Helios Energy", website="https://helios.energy")
+        prior = SearchRow(
+            id="recHOM",
+            name="Helios Energy HOM",
+            client_ids=("recHELIOS",),
+            status="Kickoff",
+            outcome="Won",
+            lead_date=date(2026, 3, 1),
+            biz_arr=20,
+            series="B",
+            search_type="Strategic",
+        )
+        airtable = _airtable_mock(index=_index(clients=[helios], searches=[prior]))
+        llm = _llm_mock(_lead(research={"biz_arr": None, "series": "B"}))
+
+        process_one_lead(_raw_email(), gmail=_gmail_mock(), airtable=airtable, llm=llm)
+
+        sent = airtable.create_search.call_args.args[0]
+        assert sent.biz_arr == 20 and sent.search_type == "Strategic"
+        assert "taken from 'Helios Energy HOM'" in sent.claude_check
 
     def test_engagement_after_lead_date_does_not_count(self):
         airtable = _airtable_mock(index=self._history(when=date(2027, 1, 1)))

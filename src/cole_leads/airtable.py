@@ -351,6 +351,10 @@ class AirtableClient:
             SEARCH_LEAD_SOURCE_VC,
             SEARCH_LEAD_SOURCE_TYPE,
             SEARCH_COMPANY_HQ,
+            SEARCH_NAME,
+            SEARCH_BIZ_ARR,
+            SEARCH_SERIES,
+            SEARCH_SEARCH_TYPE,
         ]
         searches = []
         hq_values: set[str] = set()
@@ -372,6 +376,10 @@ class AirtableClient:
                     lead_source_client_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE)),
                     lead_source_vc_ids=_as_tuple(f.get(SEARCH_LEAD_SOURCE_VC)),
                     lead_source_type=(f.get(SEARCH_LEAD_SOURCE_TYPE) or "").strip() or None,
+                    name=f.get(SEARCH_NAME),
+                    biz_arr=f.get(SEARCH_BIZ_ARR),
+                    series=f.get(SEARCH_SERIES),
+                    search_type=f.get(SEARCH_SEARCH_TYPE),
                 )
             )
         return RelationshipIndex(

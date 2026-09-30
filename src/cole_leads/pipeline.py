@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from . import filters
 from .config import TEAM_MAP
-from .derive import finalize_lead
+from .derive import apply_prior_search, finalize_lead
 from .lead_source import RelationshipIndex, norm_person, resolve_lead_source
 from .logging import get_logger
 from .models import (
@@ -199,6 +199,11 @@ def process_one_lead(
         else:
             client_id = airtable.upsert_client(lead.parsed.client, lead.research)
         hiring_client_known = existing_client is not None
+
+        # 5a'. Returning client: reuse ARR / Series from its last Search.
+        if hiring_client_known:
+            prior = index.latest_prior_search(client_id, lead.parsed.client, lead.parsed.lead_date)
+            lead, review_notes = apply_prior_search(lead, prior, review_notes)
 
         # 5b. Investors
         investor_ids: list[str] = []

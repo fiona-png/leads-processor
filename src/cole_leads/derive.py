@@ -306,3 +306,46 @@ def finalize_lead(lead, *, hq_options: list[str] | None = None):  # -> (Lead, li
     r.investors = invs[:8]
 
     return lead.model_copy(update={"parsed": p, "research": r}), notes
+
+
+# ---------------------------------------------------------------------------
+# Reuse what Cole already knows about a returning client
+# ---------------------------------------------------------------------------
+
+PRIOR_MAX_AGE_DAYS = 548  # ~18 months
+
+
+def apply_prior_search(lead, prior, notes: list[str]):  # -> (Lead, list[str])
+    """Fill gaps from the client's most recent earlier Search (human-vetted):
+    ARR and Series when research came back empty, then recompute Search Type.
+    Flags big disagreements instead of silently choosing."""
+    if prior is None or prior.lead_date is None:
+        return lead, notes
+    age = (lead.parsed.lead_date - prior.lead_date).days
+    if age < 0 or age > PRIOR_MAX_AGE_DAYS:
+        return lead, notes
+    r = lead.research.model_copy()
+    label = f"'{prior.name or 'earlier search'}' ({prior.lead_date})"
+    changed = False
+    if r.biz_arr is None and prior.biz_arr is not None:
+        r.biz_arr = float(prior.biz_arr)
+        changed = True
+        notes = [n for n in notes if not n.startswith("No ARR found")]
+        notes.append(f"ARR ${r.biz_arr:g}M taken from {label}.")
+    elif r.biz_arr is not None and prior.biz_arr and age <= 183:
+        ratio = max(r.biz_arr, prior.biz_arr) / max(min(r.biz_arr, prior.biz_arr), 0.1)
+        if ratio > 2:
+            notes.append(
+                f"ARR ${r.biz_arr:g}M differs a lot from ${prior.biz_arr:g}M on {label} - check."
+            )
+    if (r.series in (None, "Unknown")) and prior.series:
+        r.series = prior.series
+        changed = True
+        notes = [n for n in notes if not n.startswith("Series unknown")]
+        notes.append(f"Series {prior.series} taken from {label}.")
+    if changed:
+        r.search_type, st_note = search_type_for(r.biz_arr, r.series)
+        notes = [n for n in notes if not n.startswith("No ARR")]
+        if st_note:
+            notes.append(st_note)
+    return lead.model_copy(update={"research": r}), notes

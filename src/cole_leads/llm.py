@@ -77,7 +77,7 @@ _LEAD_TOOL_SCHEMA: dict[str, Any] = {
                 },
                 "lead_source_individual": {
                     "type": ["string", "null"],
-                    "description": "External person who referred. Never a Cole team member.",
+                    "description": "Who generated the lead: the external referrer, or the Cole teammate when it came from their own relationship. See system prompt.",
                 },
                 "lead_source_company": {
                     "type": ["string", "null"],
@@ -187,7 +187,10 @@ PARSING RULES
 - If the email isn't actually an executive-search lead (internal chatter, a calendar reminder, a newsletter, a candidate asking for advice), set `client` to null.
 - `lead_recipient` is the first name (lowercase) of the Cole team member the *original* lead email was sent TO (inner forwarded `To:` header, not the outer envelope).
 - `lead_date` is the date of the ORIGINAL email (inner `Date:` header), YYYY-MM-DD.
-- `lead_source_individual` is the person who referred the lead - NEVER a Cole team member.
+- `lead_source_individual` is the person who generated the lead:
+    * An external person who referred it (e.g. a VC talent partner who emailed the intro).
+    * BUT if a Cole teammate posts a lead that came from their OWN relationship or conversation ("Texting with Katie from Index", "heard from my friend at X", "I met the CEO"), the teammate is the lead source: use their full name from the signature (e.g. "Geoffrey Vitt"). Put the external contact's firm in `lead_source_company` and mention the contact in `lead_notes`.
+    * A teammate who is merely forwarding someone else's email is NOT the lead source - the original sender is.
 - `lead_source_company` is the organization the referrer works at - check signatures, email domains and titles (e.g. "Talent Partner, Sequoia"). Fill it even if they wrote from a personal address.
 - `lead_source_email` is the referrer's email address if it appears anywhere in the thread.
 - `lead_source_type` is your best guess; it is re-checked against Cole's Airtable history downstream:

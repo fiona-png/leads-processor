@@ -127,3 +127,28 @@ def test_looks_like_fund():
     assert looks_like_fund("Costanoa VC")
     assert looks_like_fund("PSG Equity")
     assert not looks_like_fund("Acme Robotics")
+
+
+def test_vc_intro_to_existing_client_is_existing_client():
+    """Simile: Index intro, but Simile already hired Cole -> Existing Client + note."""
+    idx = _index([*_vc_history(), _won("recNEW", date(2026, 8, 1))])
+    r = _resolve(idx, llm_individual="Paul Cho", referrer_email="paul@sequoiacap.com")
+    assert r.lead_source_type == "Existing Client"
+    assert r.lead_source_client_id == "recNEW"
+    assert any("Also a VC intro" in n for n in r.review_notes)
+
+
+def test_latest_prior_search_matches_same_name_client_rows():
+    prior = SearchRow(
+        id="recHOM",
+        name="Acme HOM",
+        client_ids=("recACME",),
+        status="Kickoff",
+        outcome="Won",
+        lead_date=date(2026, 8, 1),
+        biz_arr=20,
+    )
+    idx = _index([prior])
+    got = idx.latest_prior_search("recACME", "Acme", date(2026, 9, 30))
+    assert got is not None and got.id == "recHOM"
+    assert idx.latest_prior_search("recACME", "Acme", date(2026, 7, 1)) is None

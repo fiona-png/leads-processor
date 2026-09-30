@@ -186,6 +186,10 @@ class SearchRow:
     lead_source_client_ids: tuple[str, ...] = ()
     lead_source_vc_ids: tuple[str, ...] = ()
     lead_source_type: str | None = None
+    name: str | None = None
+    biz_arr: float | None = None
+    series: str | None = None
+    search_type: str | None = None
 
     def engaged_on(self) -> date | None:
         """When this search counts as an engagement, or None if it never did."""
@@ -275,7 +279,10 @@ class RelationshipIndex:
         person_rows: dict[str, list[SearchRow]] = defaultdict(list)
         self._person_spelling: dict[str, Counter[str]] = defaultdict(Counter)
 
+        self._searches_by_client: dict[str, list[SearchRow]] = defaultdict(list)
         for s in searches:
+            for cid in s.client_ids:
+                self._searches_by_client[cid].append(s)
             when = s.engaged_on()
             if when is not None:
                 for cid in s.client_ids:
@@ -409,6 +416,31 @@ class RelationshipIndex:
             return False
         first = self._first_engaged.get(client_id)
         return first is not None and first < lead_date
+
+    def latest_prior_search(
+        self, client_id: str | None, name: str | None, lead_date: date
+    ) -> SearchRow | None:
+        """Most recent earlier search for this client (or a same-named duplicate
+        client record) - its ARR / Series / Search Type were set by a human."""
+        ids = {client_id} if client_id else set()
+        n = norm_name(name or self.client_name(client_id))
+        if n:
+            ids |= {cid for cid, c in self.clients.items() if norm_name(c.name) == n}
+        best: SearchRow | None = None
+        for s in self._searches_by_client_ids(ids):
+            if (
+                s.lead_date
+                and s.lead_date < lead_date
+                and (best is None or s.lead_date > best.lead_date)
+            ):
+                best = s
+        return best
+
+    def _searches_by_client_ids(self, ids: set[str]) -> list[SearchRow]:
+        out: list[SearchRow] = []
+        for cid in ids:
+            out.extend(self._searches_by_client.get(cid, []))
+        return out
 
     def engaged_sibling_before(
         self, client_id: str | None, name: str | None, lead_date: date
@@ -574,21 +606,31 @@ def resolve_lead_source(
         existing_referrer_org = None  # VC intros are VC only
 
     # --- Decide ------------------------------------------------------------
-    if referrer_is_vc:
+    # A hiring company Cole has already worked for is an Existing Client even
+    # when a VC made the intro (Simile, Sep 2026). The VC is noted, not lost.
+    if hiring_existing:
+        final = "Existing Client"
+        reasons.append(f"{hiring_client_name} had a Cole search before {lead_date}")
+        if referrer_is_vc:
+            vc_name = (
+                index.client_name(vc_orgs[0])
+                if vc_orgs
+                else (
+                    index.investors[vc_inv_id].name if vc_inv_id in index.investors else llm_company
+                )
+            )
+            review.append(
+                f"Also a VC intro ({vc_name or 'VC'}). Tagged Existing Client - tag both once "
+                "Lead Source Type is multi-select."
+            )
+        org_id = hiring_client_id
+    elif referrer_is_vc:
         final = "VC"
         reasons.append("referrer is at a VC firm")
-        if hiring_existing:
-            review.append(
-                f"Also Existing Client: {hiring_client_name} has a prior Cole search. "
-                "Tagged VC (single-select) - tag both once Lead Source Type is multi-select."
-            )
-    elif hiring_existing or existing_referrer_org:
+    elif existing_referrer_org:
         final = "Existing Client"
-        if hiring_existing:
-            reasons.append(f"{hiring_client_name} had a Cole search before {lead_date}")
-        if existing_referrer_org:
-            org_id = existing_referrer_org
-            reasons.append(f"referrer's company {index.client_name(org_id)} is a past client")
+        org_id = existing_referrer_org
+        reasons.append(f"referrer's company {index.client_name(org_id)} is a past client")
     elif llm_type == "Existing Client":
         # The email itself suggests a past relationship but Airtable has no
         # Won/Closed/Abandoned/Canceled search before the lead date. Keep the
