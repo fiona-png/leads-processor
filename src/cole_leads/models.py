@@ -84,9 +84,7 @@ class ParsedEmail(BaseModel):
     )
     lead_source_individual: str | None = Field(
         None,
-        description=(
-            "Who generated the lead: external referrer, or the Cole teammate (own relationship)."
-        ),
+        description="External person who referred the lead. Never a Cole team member.",
     )
     lead_source_company: str | None = Field(
         None, description="External referring company (VC firm, candidate's employer, etc.)."
