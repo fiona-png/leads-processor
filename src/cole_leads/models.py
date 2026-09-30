@@ -211,6 +211,15 @@ class SearchRecord(BaseModel):
         )
 
 
+class EmailImage(BaseModel):
+    """An image from the email (e.g. a screenshot of a text or LinkedIn post)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    media_type: str
+    data_b64: str
+
+
 class RawEmail(BaseModel):
     """Minimal Gmail-message shape used downstream. `gmail.py` builds these."""
 
@@ -224,6 +233,7 @@ class RawEmail(BaseModel):
     cc_addr: str | None = None
     received_at: date
     body_text: str
+    images: list[EmailImage] = Field(default_factory=list)
 
 
 class ProcessResult(BaseModel):

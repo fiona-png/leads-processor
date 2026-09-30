@@ -153,3 +153,29 @@ def test_build_user_message_includes_inner_headers():
     assert "Jane <jane@accel.com>" in msg
     assert "leads@colellc.com" in msg
     assert "body text" in msg
+
+
+def test_images_sent_as_image_blocks():
+    from unittest.mock import MagicMock
+
+    from cole_leads.filters import ForwardedHeaders
+    from cole_leads.llm import extract_lead
+    from cole_leads.models import EmailImage
+
+    client = MagicMock()
+    client.messages.create.side_effect = RuntimeError("stop")
+    try:
+        extract_lead(
+            body_text="",
+            outer_subject="Fiona will you attach",
+            outer_from="matt@colegroup.com",
+            outer_to="leads@colegroup.com",
+            outer_received_at="2026-09-30",
+            inner=ForwardedHeaders(None, None, None, None),
+            client=client,
+            images=[EmailImage(media_type="image/jpeg", data_b64="AAAA")],
+        )
+    except RuntimeError:
+        pass
+    content = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image" and content[-1]["type"] == "text"

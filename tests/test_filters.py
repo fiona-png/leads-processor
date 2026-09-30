@@ -171,16 +171,19 @@ class TestShouldProcess:
             is False
         )
 
-    def test_short_internal_note_with_no_signals_dropped(self):
-        """Internal teammate, short body, no forward marker, no role keyword → drop."""
-        assert (
-            should_process(
-                "fyi",
-                "checking in",
-                from_addr="fiona@colegroup.com",
-            )
-            is False
+    def test_short_internal_notes_are_kept(self):
+        """Real leads from this week that the old short-note rule threw away."""
+        assert should_process(
+            "Simile CRO",
+            "Sounds like this should be coming our way. Texting with Katie from Index",
+            from_addr="geoff@colegroup.com",
         )
+        assert should_process(
+            "VP/CRO search for GTM tech (Battery Ventures)",
+            "Lead came from Jenny at Battery. I'm full but anyone interested! I can intro!!",
+            from_addr="david@colegroup.com",
+        )
+        assert should_process("Fiona will you attach", "", from_addr="matt@colegroup.com")
 
     def test_long_internal_note_with_no_signals_kept(self):
         """Same internal sender but >=200 chars of body → fall through to accept."""

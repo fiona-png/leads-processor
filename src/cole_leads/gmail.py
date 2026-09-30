@@ -23,15 +23,27 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .logging import get_logger
-from .models import RawEmail
+from .models import EmailImage, RawEmail
 
 PROCESSED_LABEL_NAME = "cole-leads/processed"
 FAILED_LABEL_NAME = "cole-leads/failed"
 
+SKIPPED_LABEL_NAME = "cole-leads/skipped"
+
+_LEADS_ADDRS = ("leads@colegroup.com", "leads@cole.co", "leads@colellc.com")
+# to:, cc: and deliveredto: - leads are often posted with leads@ on cc.
 LEADS_QUERY = (
-    "(to:leads@colegroup.com OR to:leads@cole.co OR to:leads@colellc.com) "
-    f"-label:{PROCESSED_LABEL_NAME}"
+    "("
+    + " OR ".join(f"{op}:{a}" for a in _LEADS_ADDRS for op in ("to", "cc", "deliveredto"))
+    + f") -label:{PROCESSED_LABEL_NAME} -in:sent -in:drafts"
+    # Widening the query to cc:/deliveredto: would otherwise pull in years of
+    # never-labeled history and re-create old leads. Only look forward.
+    + " after:2026/09/27"
 )
+
+# Screenshots (e.g. a LinkedIn post or text message) are sent to the model.
+MAX_IMAGES = 3
+MAX_IMAGE_BYTES = 4_500_000
 
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -130,11 +142,27 @@ def _parse_date(value: str) -> date:
         return date.today()
 
 
-def _build_raw_email(message: dict[str, Any]) -> RawEmail:
+def _image_parts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every image/* part in the message tree (attachments and inline)."""
+    found: list[dict[str, Any]] = []
+
+    def _walk(part: dict[str, Any]) -> None:
+        mime = (part.get("mimeType") or "").lower()
+        if mime in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            found.append(part)
+        for p in part.get("parts") or []:
+            _walk(p)
+
+    _walk(payload)
+    return found
+
+
+def _build_raw_email(message: dict[str, Any], images: list[EmailImage] | None = None) -> RawEmail:
     payload = message.get("payload", {})
     headers = payload.get("headers", [])
     received = _header(headers, "Date")
     return RawEmail(
+        images=images or [],
         message_id=message["id"],
         thread_id=message.get("threadId", ""),
         subject=_header(headers, "Subject"),
@@ -172,6 +200,7 @@ class GmailClient:
         self._user = user_email or "me"
         self._processed_label_id: str | None = None
         self._failed_label_id: str | None = None
+        self._skipped_label_id: str | None = None
 
     # ----- public API -------------------------------------------------------
 
@@ -202,7 +231,7 @@ class GmailClient:
                 self._service.users().messages().get(userId=self._user, id=ref["id"], format="full")
             )
             try:
-                emails.append(_build_raw_email(msg))
+                emails.append(_build_raw_email(msg, self._fetch_images(msg)))
             except Exception as e:  # noqa: BLE001 — best-effort parsing
                 logger.warning(
                     "gmail_parse_failed",
@@ -210,6 +239,58 @@ class GmailClient:
                 )
                 continue
         return emails
+
+    def _fetch_images(self, msg: dict[str, Any]) -> list[EmailImage]:
+        """Download up to MAX_IMAGES images; failures are logged, never fatal."""
+        out: list[EmailImage] = []
+        for part in _image_parts(msg.get("payload", {})):
+            if len(out) >= MAX_IMAGES:
+                break
+            body = part.get("body", {}) or {}
+            if (body.get("size") or 0) > MAX_IMAGE_BYTES:
+                continue
+            try:
+                data = body.get("data")
+                if not data and body.get("attachmentId"):
+                    att = self._exec(
+                        self._service.users()
+                        .messages()
+                        .attachments()
+                        .get(userId=self._user, messageId=msg["id"], id=body["attachmentId"])
+                    )
+                    data = att.get("data")
+                if not data:
+                    continue
+                raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+                if len(raw) > MAX_IMAGE_BYTES:
+                    continue
+                out.append(
+                    EmailImage(
+                        media_type=part["mimeType"].lower(),
+                        data_b64=base64.b64encode(raw).decode("ascii"),
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "gmail_image_failed", extra={"message_id": msg.get("id"), "error": str(e)}
+                )
+        return out
+
+    def mark_skipped(self, message_id: str, reason: str) -> None:
+        """Processed + a visible `cole-leads/skipped` label, so anything the bot
+        decided wasn't a lead can be found in Gmail and double-checked."""
+        processed = self._get_or_create_label(PROCESSED_LABEL_NAME, "_processed_label_id")
+        skipped = self._get_or_create_label(SKIPPED_LABEL_NAME, "_skipped_label_id")
+        self._exec(
+            self._service.users()
+            .messages()
+            .modify(
+                userId=self._user,
+                id=message_id,
+                body={"addLabelIds": [processed, skipped]},
+            )
+        )
+        logger.info("gmail_marked_skipped", extra={"message_id": message_id, "reason": reason})
 
     def mark_processed(self, message_id: str) -> None:
         label_id = self._get_or_create_label(PROCESSED_LABEL_NAME, "_processed_label_id")

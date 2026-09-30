@@ -211,7 +211,7 @@ class TestFilter:
         assert result.status == "skipped_filter"
         llm.parse_and_research.assert_not_called()
         airtable.upsert_client.assert_not_called()
-        gmail.mark_processed.assert_called_once_with("msg-abc")
+        gmail.mark_skipped.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ class TestLLMReturnsNoLead:
         airtable.find_or_create_investor.assert_not_called()
         airtable.create_search.assert_not_called()
         # But we still mark the message processed so it doesn't keep coming back.
-        gmail.mark_processed.assert_called_once_with("msg-abc")
+        gmail.mark_skipped.assert_called_once()
         gmail.mark_failed.assert_not_called()
 
     def test_client_none_in_dry_run_does_not_label_gmail(self):

@@ -481,3 +481,23 @@ class TestBulkApplyProcessedLabel:
 
         body = service.users.return_value.messages.return_value.batchModify.call_args.kwargs["body"]
         assert body["addLabelIds"] == ["LBL_PROCESSED_RIGHT"]
+
+
+def test_query_includes_cc_and_skips_sent():
+    from cole_leads.gmail import LEADS_QUERY
+
+    assert "cc:leads@colegroup.com" in LEADS_QUERY
+    assert "-in:sent" in LEADS_QUERY
+
+
+def test_image_parts_found_in_nested_payload():
+    from cole_leads.gmail import _image_parts
+
+    payload = {
+        "mimeType": "multipart/mixed",
+        "parts": [
+            {"mimeType": "text/plain", "body": {"data": ""}},
+            {"mimeType": "image/jpeg", "filename": "73021.jpg", "body": {"attachmentId": "A1"}},
+        ],
+    }
+    assert [p["filename"] for p in _image_parts(payload)] == ["73021.jpg"]

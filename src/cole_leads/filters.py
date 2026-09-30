@@ -128,23 +128,14 @@ def should_process(subject: str, body: str, *, from_addr: str = "") -> bool:
       2. Keep anything that looks like a forward (subject token or body marker).
       3. Keep anything with a role/intent keyword in the subject — direct
          emails like "Acme CMO opportunity" or "airops lead" come in cold.
-      4. Drop a short internal note that has neither signal (a teammate
-         scribbling something to the list with no role and no forward).
-      5. Otherwise accept and let the LLM decide.
+      4. Otherwise accept and let the LLM decide.
+
+    Short internal notes are NOT dropped any more: "Simile CRO - texting with
+    Katie from Index" and "VP/CRO search (Battery Ventures)" are exactly how
+    teammates post leads, and the old short-note rule silently threw them away.
+    The LLM returns client=null for real chatter, which costs one cheap call.
     """
-    if is_reply_not_forward(subject):
-        return False
-
-    forward = is_forward(subject, body)
-    keyword = has_role_keyword(subject)
-
-    if forward or keyword:
-        return True
-
-    if from_addr and is_internal(from_addr) and len(body or "") < _INTERNAL_SHORT_NOTE_MAX_CHARS:
-        return False
-
-    return True
+    return not is_reply_not_forward(subject)
 
 
 @dataclass(frozen=True)
